@@ -88,6 +88,7 @@ enum SettingsPageId {
   background,
   systemAccess,
   privacy,
+  backup,
   sharedLinks,
   engine,
   remote,
@@ -585,6 +586,14 @@ final _pages = <SettingsPageMeta>[
     links: const ['privacy'],
   ),
   SettingsPageMeta(
+    SettingsPageId.backup,
+    title: (l) => l.backupDataTitle,
+    group: _general,
+    keywords: (l) => l.searchKwBackup,
+    freq: Freq.medium,
+    links: const ['backup', 'restore'],
+  ),
+  SettingsPageMeta(
     SettingsPageId.sharedLinks,
     title: (l) => l.remoteHostedMyLinks,
     parent: SettingsPageId.privacy,
@@ -702,6 +711,21 @@ abstract final class Spots {
     group: _general,
     title: (l) => l.localeTitle,
     keywords: (l) => l.searchKwLanguage,
+  );
+  static final backupNow = SettingSpot(
+    'backup-now',
+    page: SettingsPageId.backup,
+    title: (l) => l.backupNowTitle,
+    keywords: (l) => l.searchKwBackup,
+    freq: Freq.medium,
+    link: 'backup-now',
+  );
+  static final backupRestore = SettingSpot(
+    'backup-restore',
+    page: SettingsPageId.backup,
+    title: (l) => l.backupRestoreTitle,
+    keywords: (l) => l.searchKwBackup,
+    link: 'backup-restore',
   );
   static final askAi = SettingSpot(
     'ask-ai',
@@ -1231,6 +1255,8 @@ final _rows = <SettingSpot>[
   Spots.chatTextSize,
   Spots.foldTurns,
   Spots.language,
+  Spots.backupNow,
+  Spots.backupRestore,
   Spots.askAi,
   Spots.community,
   Spots.addProvider,

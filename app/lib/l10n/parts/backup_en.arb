@@ -1,0 +1,18 @@
+{
+  "backupDataTitle": "Backup & restore",
+  "backupDataNote": "A backup packs this phone's chats, settings, workspace and tavern data into one ZIP you can keep or share. The ZIP contains credentials such as model API keys, so keep it somewhere you trust. Restoring stops the local engine first and checks the ZIP before anything is replaced, so a damaged file changes nothing. Voice models and the engine itself are not in the backup.",
+  "backupNowTitle": "Back up now",
+  "backupNowSubtitle": "Pack all on-device data into a ZIP you can save or share",
+  "backupRestoreTitle": "Restore from a backup",
+  "backupRestoreSubtitle": "Pick a backup ZIP; nothing is replaced until it passes checks",
+  "backupRestoreAction": "Restore",
+  "backupRestoreConfirmTitle": "Replace the current data with this backup?",
+  "backupRestoreConfirmMessage": "The chats, settings and workspace here will be replaced by the backup's. Restoring stops the local engine first, and a damaged or mismatched backup changes nothing. Backing up first is a good idea.",
+  "backupReady": "Backup ready: {files} files, {size}",
+  "backupReadySkipped": "Backup ready: {files} files, {size}; skipped {links} symbolic links",
+  "backupFailed": "Backup failed: {error}",
+  "backupRestored": "Restored {files} files. Close and reopen the app so every setting takes effect",
+  "backupRestoreFailed": "Restore failed and the current data was left as it was: {error}",
+  "backupRestartFailed": "The local engine did not start again. Start it from the local engine page",
+  "searchKwBackup": "backup,restore,export,import,archive,snapshot,save"
+}

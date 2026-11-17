@@ -3470,6 +3470,102 @@ abstract class L10n {
   /// **'未能确认操作结果。先核实结果；已派发的命令不要自动重试。'**
   String get androidShellErrorUnknown;
 
+  /// No description provided for @backupDataTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'备份与恢复'**
+  String get backupDataTitle;
+
+  /// No description provided for @backupDataNote.
+  ///
+  /// In zh, this message translates to:
+  /// **'备份把本机的对话、设置、工作区和酒馆等数据打包成一个 ZIP，可以存到手机或分享出去。ZIP 里有模型密钥等凭据，请只放在自己信得过的地方。恢复前会先停止本机引擎并校验备份，校验不过不会改动现有数据；语音模型和引擎本体不在备份里。'**
+  String get backupDataNote;
+
+  /// No description provided for @backupNowTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'立即备份'**
+  String get backupNowTitle;
+
+  /// No description provided for @backupNowSubtitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'打包全部本机数据，保存或分享 ZIP'**
+  String get backupNowSubtitle;
+
+  /// No description provided for @backupRestoreTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'从备份恢复'**
+  String get backupRestoreTitle;
+
+  /// No description provided for @backupRestoreSubtitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'选一个备份 ZIP，校验通过才替换现有数据'**
+  String get backupRestoreSubtitle;
+
+  /// No description provided for @backupRestoreAction.
+  ///
+  /// In zh, this message translates to:
+  /// **'恢复'**
+  String get backupRestoreAction;
+
+  /// No description provided for @backupRestoreConfirmTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'用这个备份替换现在的数据？'**
+  String get backupRestoreConfirmTitle;
+
+  /// No description provided for @backupRestoreConfirmMessage.
+  ///
+  /// In zh, this message translates to:
+  /// **'现在的对话、设置和工作区会被备份里的内容替换。恢复会先停止本机引擎；备份损坏或校验不通过时不会改动任何数据。建议先做一次备份。'**
+  String get backupRestoreConfirmMessage;
+
+  /// No description provided for @backupReady.
+  ///
+  /// In zh, this message translates to:
+  /// **'备份已生成：{files} 个文件，{size}'**
+  String backupReady(int files, String size);
+
+  /// No description provided for @backupReadySkipped.
+  ///
+  /// In zh, this message translates to:
+  /// **'备份已生成：{files} 个文件，{size}；跳过了 {links} 个符号链接'**
+  String backupReadySkipped(int files, String size, int links);
+
+  /// No description provided for @backupFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'备份失败：{error}'**
+  String backupFailed(String error);
+
+  /// No description provided for @backupRestored.
+  ///
+  /// In zh, this message translates to:
+  /// **'已恢复 {files} 个文件，请关闭并重新打开 App 让设置生效'**
+  String backupRestored(int files);
+
+  /// No description provided for @backupRestoreFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'恢复失败，现有数据没有改动：{error}'**
+  String backupRestoreFailed(String error);
+
+  /// No description provided for @backupRestartFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'本机引擎没能重新启动，请到「本机引擎」里手动启动'**
+  String get backupRestartFailed;
+
+  /// No description provided for @searchKwBackup.
+  ///
+  /// In zh, this message translates to:
+  /// **'备份,恢复,还原,导出,导入,存档,打包,backup,restore,export,import,archive'**
+  String get searchKwBackup;
+
   /// No description provided for @botsFolderGone.
   ///
   /// In zh, this message translates to:

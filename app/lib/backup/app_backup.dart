@@ -1,0 +1,554 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:archive/archive_io.dart';
+import 'package:crypto/crypto.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../runtime/local_paths.dart';
+
+const _format = 'dshgo-app-backup';
+const _version = 1;
+const _manifestName = 'manifest.json';
+const _manifestByteCap = 8 * 1024 * 1024;
+
+/// App data kept under the application support directory. `runtime` (the
+/// engine's own rootfs), `speech` (downloaded voice models) and `workshop`
+/// (a catalog cache) are rebuilt or downloaded again, so they are not here.
+const _supportRoots = ['tavern', 'tavern_avatars', 'companion', 'pets', 'wallpaper', 'launch', 'call'];
+
+/// The engine's user home. Chat sessions live in `.dsh/sessions`, storages in
+/// `.dsh/storages`, skills in `.dsh/skills` and `.agents`, and files the person
+/// asked the AI to write in `workspace`.
+const _engineRoots = ['.dsh', '.agents', 'workspace'];
+
+/// Top-level folders inside a root that a backup leaves out: the speech model
+/// is a download of several hundred MB and `logs` is diagnosis, neither is
+/// something a person can lose. The live copies stay untouched by a restore.
+const _excluded = <String, Set<String>>{
+  'engine/.dsh': {'speech-to-text', 'logs'},
+};
+
+final _knownRoots = List<String>.unmodifiable([
+  for (final name in _engineRoots) 'engine/$name',
+  for (final name in _supportRoots) 'support/$name',
+]);
+
+/// Metadata of the immutable snapshot carried by an app backup.
+class AppBackupInfo {
+  const AppBackupInfo({
+    required this.createdAt,
+    required this.fileCount,
+    required this.totalBytes,
+    required this.skippedLinks,
+  });
+
+  final DateTime createdAt;
+  final int fileCount;
+  final int totalBytes;
+
+  /// Symbolic links are not followed: a link may point outside the app or back
+  /// into its own tree. Regular files and directories are always included.
+  final int skippedLinks;
+}
+
+/// Reads and restores the phone's user data without touching the installed
+/// engine binaries. The caller stops the local engine before either operation.
+class AppBackupStore {
+  AppBackupStore({
+    Future<Directory> Function()? support,
+    Future<Directory> Function()? engineHome,
+    Future<SharedPreferences> Function()? preferences,
+    DateTime Function()? now,
+  }) : _support = support ?? getApplicationSupportDirectory,
+       _engineHome = engineHome ?? _defaultEngineHome,
+       _preferences = preferences ?? SharedPreferences.getInstance,
+       _now = now ?? DateTime.now;
+
+  static Future<Directory> _defaultEngineHome() async {
+    final root = LocalPaths.root ?? '${(await getApplicationSupportDirectory()).path}/runtime/rootfs';
+    return Directory('$root/root');
+  }
+
+  final Future<Directory> Function() _support;
+  final Future<Directory> Function() _engineHome;
+  final Future<SharedPreferences> Function() _preferences;
+  final DateTime Function() _now;
+
+  Future<Map<String, Directory>> _targets() async {
+    final support = await _support();
+    final engine = await _engineHome();
+    return {
+      for (final name in _engineRoots) 'engine/$name': Directory('${engine.path}/$name'),
+      for (final name in _supportRoots) 'support/$name': Directory('${support.path}/$name'),
+    };
+  }
+
+  /// Writes a complete ZIP to [destinationPath], publishing it only after the
+  /// encoder has closed successfully. No existing destination is overwritten.
+  Future<AppBackupInfo> backup(String destinationPath) async {
+    final targets = await _targets();
+    final preferences = await _readPreferences(await _preferences());
+    final files = <_SourceFile>[];
+    final directories = <String>[];
+    final presentRoots = <String>[];
+    var skippedLinks = 0;
+    var totalBytes = 0;
+
+    for (final root in _knownRoots) {
+      final directory = targets[root]!;
+      final excluded = _excluded[root] ?? const <String>{};
+      final type = await FileSystemEntity.type(directory.path, followLinks: false);
+      if (type == FileSystemEntityType.notFound) continue;
+      if (type != FileSystemEntityType.directory) {
+        throw FileSystemException('A backup root is not a real directory', directory.path);
+      }
+      presentRoots.add(root);
+      directories.add(root);
+
+      Future<void> walk(Directory current, String prefix) async {
+        final children = await current.list(followLinks: false).toList();
+        children.sort((a, b) => a.path.compareTo(b.path));
+        for (final entity in children) {
+          final name = entity.uri.pathSegments.where((part) => part.isNotEmpty).last;
+          if (prefix == root && excluded.contains(name)) continue;
+          final relative = '$prefix/$name';
+          _checkRelativePath(relative);
+          final childType = await FileSystemEntity.type(entity.path, followLinks: false);
+          if (childType == FileSystemEntityType.directory) {
+            directories.add(relative);
+            await walk(Directory(entity.path), relative);
+          } else if (childType == FileSystemEntityType.file) {
+            final file = File(entity.path);
+            final size = await file.length();
+            files.add(_SourceFile(relative, file, size, await _hash(file)));
+            totalBytes += size;
+          } else {
+            skippedLinks++;
+          }
+        }
+      }
+
+      await walk(directory, root);
+    }
+
+    files.sort((a, b) => a.path.compareTo(b.path));
+    directories.sort();
+    final info = AppBackupInfo(
+      createdAt: _now().toUtc(),
+      fileCount: files.length,
+      totalBytes: totalBytes,
+      skippedLinks: skippedLinks,
+    );
+    final manifest = utf8.encode(
+      jsonEncode({
+        'format': _format,
+        'version': _version,
+        'createdAt': info.createdAt.toIso8601String(),
+        'skippedLinks': skippedLinks,
+        'roots': presentRoots,
+        'directories': directories,
+        'preferences': preferences,
+        'files': [
+          for (final file in files) {'path': file.path, 'size': file.size, 'sha256': file.hash},
+        ],
+      }),
+    );
+
+    final destination = File(destinationPath);
+    await destination.parent.create(recursive: true);
+    if (await FileSystemEntity.type(destination.path, followLinks: false) != FileSystemEntityType.notFound) {
+      throw FileSystemException('The backup destination already exists', destination.path);
+    }
+    final outputWork = await destination.parent.createTemp('.dshgo-app-backup-');
+    final temporary = File('${outputWork.path}/backup.zip');
+    try {
+      final output = OutputFileStream(temporary.path);
+      final encoder = ZipFileEncoder();
+      var closed = false;
+      try {
+        encoder.createWithStream(output);
+        encoder.addArchiveFile(ArchiveFile.bytes(_manifestName, manifest));
+        encoder.addArchiveFile(ArchiveFile.directory('data/'));
+        for (final directory in directories) {
+          encoder.addArchiveFile(ArchiveFile.directory('data/$directory/'));
+        }
+        for (final file in files) {
+          if (await file.source.length() != file.size) {
+            throw FileSystemException('A file changed while the backup was being written', file.source.path);
+          }
+          final input = InputFileStream(file.source.path);
+          try {
+            encoder.addArchiveFile(ArchiveFile.stream('data/${file.path}', input));
+          } finally {
+            await input.close();
+          }
+        }
+        await encoder.close();
+        closed = true;
+      } finally {
+        if (!closed) await output.close();
+      }
+      await temporary.rename(destination.path);
+      return info;
+    } finally {
+      await _deleteTree(outputWork);
+    }
+  }
+
+  /// Validates and extracts the whole archive before replacing any live root.
+  /// Existing roots are moved aside and put back if a swap or preference write
+  /// fails. Secure-storage keys are not part of SharedPreferences and remain
+  /// under the operating system's control.
+  Future<AppBackupInfo> restore(String archivePath) async {
+    final support = await _support();
+    await support.create(recursive: true);
+    final work = await support.createTemp('.dshgo-app-restore-');
+    var preserveWork = false;
+    try {
+      final incoming = Directory('${work.path}/incoming');
+      await incoming.create();
+      final manifest = await _extract(archivePath, work, incoming);
+      final targets = await _targets();
+      if (targets.keys.toSet().difference(_knownRoots.toSet()).isNotEmpty) {
+        throw StateError('Unknown backup target');
+      }
+      for (final target in targets.values) {
+        final type = await FileSystemEntity.type(target.path, followLinks: false);
+        if (type != FileSystemEntityType.notFound && type != FileSystemEntityType.directory) {
+          throw FileSystemException('A restore destination is not a real directory', target.path);
+        }
+      }
+
+      final preferences = await _preferences();
+      final previousPreferences = await _readPreferences(preferences);
+      final previous = Directory('${work.path}/previous');
+      await previous.create();
+      final actions = <_RestoreAction>[];
+      var mutated = false;
+      try {
+        for (final (index, root) in _knownRoots.indexed) {
+          final target = targets[root]!;
+          final source = Directory('${incoming.path}/$root');
+          final old = Directory('${previous.path}/$index');
+          final hasSource = manifest.roots.contains(root);
+          final hadTarget =
+              await FileSystemEntity.type(target.path, followLinks: false) != FileSystemEntityType.notFound;
+          final action = _RestoreAction(root, target, old, hadTarget);
+          actions.add(action);
+          await target.parent.create(recursive: true);
+          if (hadTarget) {
+            await target.rename(old.path);
+            action.movedAside = true;
+            mutated = true;
+          }
+          if (hasSource) {
+            if (await FileSystemEntity.type(source.path, followLinks: false) != FileSystemEntityType.directory) {
+              throw FormatException('The restored root is missing: $root');
+            }
+            await source.rename(target.path);
+            action.installed = true;
+            mutated = true;
+          }
+        }
+        await _writePreferences(preferences, manifest.preferences);
+        // The archive leaves voice models and logs out on purpose; the copies
+        // in the old tree are the only ones on the phone, so they move into the
+        // restored tree. Failing here costs a download, never the restore.
+        await _carryExcluded(actions);
+        final info = manifest.info;
+        await _deleteTree(work);
+        return info;
+      } catch (error, stack) {
+        if (!mutated) rethrow;
+        try {
+          await _writePreferences(preferences, previousPreferences);
+          for (final action in actions.reversed) {
+            if (action.installed &&
+                await FileSystemEntity.type(action.target.path, followLinks: false) != FileSystemEntityType.notFound) {
+              await action.target.delete(recursive: true);
+            }
+            if (action.movedAside &&
+                await FileSystemEntity.type(action.previous.path, followLinks: false) !=
+                    FileSystemEntityType.notFound) {
+              await action.previous.rename(action.target.path);
+            }
+          }
+        } catch (rollbackError) {
+          preserveWork = true;
+          throw FileSystemException(
+            'Restore failed and its previous data was kept at ${work.path}: $rollbackError',
+            archivePath,
+          );
+        }
+        Error.throwWithStackTrace(error, stack);
+      }
+    } finally {
+      if (!preserveWork) await _deleteTree(work);
+    }
+  }
+
+  Future<void> _carryExcluded(List<_RestoreAction> actions) async {
+    for (final action in actions) {
+      final names = _excluded[action.root];
+      if (names == null || !action.installed || !action.movedAside) continue;
+      for (final name in names) {
+        final from = Directory('${action.previous.path}/$name');
+        final to = Directory('${action.target.path}/$name');
+        try {
+          if (await FileSystemEntity.type(from.path, followLinks: false) != FileSystemEntityType.directory) continue;
+          if (await FileSystemEntity.type(to.path, followLinks: false) != FileSystemEntityType.notFound) continue;
+          await from.rename(to.path);
+        } catch (_) {
+          // Keep the restored data; a missing model is downloaded again.
+        }
+      }
+    }
+  }
+
+  Future<Map<String, Object?>> _readPreferences(SharedPreferences preferences) async {
+    final result = <String, Object?>{};
+    for (final key in preferences.getKeys().toList()..sort()) {
+      final value = preferences.get(key);
+      _checkPreference(value);
+      result[key] = value;
+    }
+    return result;
+  }
+
+  Future<void> _writePreferences(SharedPreferences preferences, Map<String, Object?> values) async {
+    final current = preferences.getKeys().toSet();
+    for (final key in current.difference(values.keys.toSet())) {
+      if (!await preferences.remove(key)) throw StateError('Could not remove a preference');
+    }
+    for (final entry in values.entries) {
+      final value = entry.value;
+      final ok = switch (value) {
+        String() => preferences.setString(entry.key, value),
+        int() => preferences.setInt(entry.key, value),
+        double() => preferences.setDouble(entry.key, value),
+        bool() => preferences.setBool(entry.key, value),
+        List() => preferences.setStringList(entry.key, List<String>.from(value)),
+        _ => throw const FormatException('Unsupported preference value'),
+      };
+      if (!await ok) throw StateError('Could not save a preference');
+    }
+  }
+}
+
+class _SourceFile {
+  const _SourceFile(this.path, this.source, this.size, this.hash);
+  final String path;
+  final File source;
+  final int size;
+  final String hash;
+}
+
+class _ManifestFile {
+  const _ManifestFile(this.path, this.size, this.hash);
+  final String path;
+  final int size;
+  final String hash;
+}
+
+class _Manifest {
+  const _Manifest(this.info, this.roots, this.preferences);
+  final AppBackupInfo info;
+  final Set<String> roots;
+  final Map<String, Object?> preferences;
+}
+
+class _RestoreAction {
+  _RestoreAction(this.root, this.target, this.previous, this.hadTarget);
+  final String root;
+  final Directory target;
+  final Directory previous;
+  final bool hadTarget;
+  var movedAside = false;
+  var installed = false;
+}
+
+Future<_Manifest> _extract(String archivePath, Directory work, Directory incoming) async {
+  final input = InputFileStream(archivePath);
+  try {
+    final names = <String>{};
+    final archive = ZipDecoder().decodeStream(
+      input,
+      verify: true,
+      callback: (entry) {
+        final path = _archivePath(entry);
+        if (!names.add(path)) throw FormatException('Duplicate ZIP entry: $path');
+      },
+    );
+    final byName = <String, ArchiveFile>{for (final entry in archive) _archivePath(entry): entry};
+    final manifestEntry = byName[_manifestName];
+    if (manifestEntry == null ||
+        !manifestEntry.isFile ||
+        manifestEntry.size < 0 ||
+        manifestEntry.size > _manifestByteCap) {
+      throw const FormatException('The app backup manifest is missing or too large');
+    }
+    final manifestBytes = manifestEntry.readBytes();
+    if (manifestBytes == null || manifestBytes.length > _manifestByteCap) {
+      throw const FormatException('The app backup manifest is too large');
+    }
+    final raw = jsonDecode(utf8.decode(manifestBytes));
+    if (raw is! Map<String, Object?> || raw['format'] != _format || raw['version'] != _version) {
+      throw const FormatException('Unsupported app backup format or version');
+    }
+    final created = raw['createdAt'];
+    final rootsValue = raw['roots'];
+    final directoriesValue = raw['directories'];
+    final filesValue = raw['files'];
+    final preferencesValue = raw['preferences'];
+    final skippedLinks = raw['skippedLinks'];
+    if (created is! String ||
+        DateTime.tryParse(created) == null ||
+        rootsValue is! List ||
+        directoriesValue is! List ||
+        filesValue is! List ||
+        preferencesValue is! Map ||
+        skippedLinks is! int ||
+        skippedLinks < 0) {
+      throw const FormatException('Invalid app backup manifest');
+    }
+    final roots = <String>{};
+    for (final root in rootsValue) {
+      if (root is! String || !_knownRoots.contains(root) || !roots.add(root)) {
+        throw const FormatException('Invalid app backup roots');
+      }
+    }
+    final preferences = <String, Object?>{};
+    for (final entry in preferencesValue.entries) {
+      if (entry.key is! String) throw const FormatException('Invalid preference name');
+      _checkPreference(entry.value);
+      preferences[entry.key as String] = entry.value;
+    }
+
+    bool insidePresentRoot(String path, {required bool file}) =>
+        roots.any((root) => file ? path.startsWith('$root/') : path == root || path.startsWith('$root/'));
+    final directories = <String>{};
+    for (final value in directoriesValue) {
+      if (value is! String) throw const FormatException('Invalid backup directory');
+      _checkRelativePath(value);
+      if (!insidePresentRoot(value, file: false) || !directories.add(value)) {
+        throw const FormatException('Invalid or duplicate backup directory');
+      }
+    }
+    final files = <_ManifestFile>[];
+    final filePaths = <String>{};
+    var totalBytes = 0;
+    for (final value in filesValue) {
+      if (value is! Map) throw const FormatException('Invalid backup file');
+      final path = value['path'];
+      final size = value['size'];
+      final hash = value['sha256'];
+      if (path is! String || size is! int || size < 0 || hash is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(hash)) {
+        throw const FormatException('Invalid backup file record');
+      }
+      _checkRelativePath(path);
+      if (!insidePresentRoot(path, file: true) || !filePaths.add(path)) {
+        throw const FormatException('Invalid or duplicate backup file');
+      }
+      files.add(_ManifestFile(path, size, hash));
+      totalBytes += size;
+    }
+    final expected = <String>{
+      _manifestName,
+      'data',
+      for (final directory in directories) 'data/$directory',
+      for (final file in files) 'data/${file.path}',
+    };
+    if (names.length != expected.length || !names.containsAll(expected)) {
+      throw const FormatException('ZIP entries do not match the app backup manifest');
+    }
+    if (byName['data']!.isFile) throw const FormatException('The backup data entry is not a directory');
+    for (final directory in directories) {
+      if (byName['data/$directory']!.isFile) throw const FormatException('A backup directory is encoded as a file');
+      await Directory('${incoming.path}/$directory').create(recursive: true);
+    }
+    for (final file in files) {
+      final entry = byName['data/${file.path}']!;
+      if (!entry.isFile || entry.size != file.size) throw const FormatException('Backup file size does not match');
+      final destination = File('${incoming.path}/${file.path}');
+      await destination.parent.create(recursive: true);
+      final output = OutputFileStream(destination.path);
+      try {
+        entry.writeContent(output);
+      } finally {
+        await output.close();
+      }
+      if (await destination.length() != file.size || await _hash(destination) != file.hash) {
+        throw FormatException('Backup checksum does not match: ${file.path}');
+      }
+    }
+    return _Manifest(
+      AppBackupInfo(
+        createdAt: DateTime.parse(created).toUtc(),
+        fileCount: files.length,
+        totalBytes: totalBytes,
+        skippedLinks: skippedLinks,
+      ),
+      roots,
+      preferences,
+    );
+  } finally {
+    await input.close();
+  }
+}
+
+String _archivePath(ArchiveFile entry) {
+  final fileType = entry.mode & 0xf000;
+  if (entry.symbolicLink != null || entry.isHardLink || (fileType != 0 && fileType != 0x8000 && fileType != 0x4000)) {
+    throw FormatException('A backup cannot contain linked or special entries: ${entry.name}');
+  }
+  final path = entry.isDirectory && entry.name.endsWith('/')
+      ? entry.name.substring(0, entry.name.length - 1)
+      : entry.name;
+  _checkRelativePath(path);
+  if (path != _manifestName && path != 'data' && !path.startsWith('data/')) {
+    throw FormatException('Unexpected ZIP entry: $path');
+  }
+  return path;
+}
+
+void _checkRelativePath(String path) {
+  final parts = path.split('/');
+  if (path.isEmpty ||
+      path.startsWith('/') ||
+      path.contains('\\') ||
+      path.contains('\x00') ||
+      parts.any((part) => part.isEmpty || part == '.' || part == '..')) {
+    throw FormatException('Unsafe backup path: $path');
+  }
+}
+
+void _checkPreference(Object? value) {
+  final valid =
+      value is String ||
+      value is int ||
+      value is double ||
+      value is bool ||
+      value is List && value.every((v) => v is String);
+  if (!valid) throw const FormatException('Unsupported preference value');
+}
+
+Future<String> _hash(File file) async {
+  final digest = await sha256.bind(file.openRead()).first;
+  return digest.toString();
+}
+
+Future<void> _deleteTree(Directory directory) async {
+  if (await FileSystemEntity.type(directory.path, followLinks: false) == FileSystemEntityType.directory) {
+    await directory.delete(recursive: true);
+  }
+}
+
+String appBackupName(DateTime at) {
+  String two(int value) => value.toString().padLeft(2, '0');
+  return 'dshgo-backup-${at.year}${two(at.month)}${two(at.day)}-${two(at.hour)}${two(at.minute)}${two(at.second)}.zip';
+}
+
+String appBackupSize(int bytes) =>
+    bytes < 1024 * 1024 ? '${(bytes / 1024).ceil()} KB' : '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';

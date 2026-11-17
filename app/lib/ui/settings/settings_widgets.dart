@@ -23,6 +23,16 @@ export 'index/spots.dart' show SettingSpot, SettingsIndex, SettingsPageId, Spots
 /// flush with the 16 page gutter.
 const kSettingsGroupMargin = EdgeInsets.fromLTRB(16, 0, 16, 24);
 
+/// One hue per group on the hub: rows of a group share it.
+abstract final class SettingsHues {
+  static const ai = 0;
+  static const abilities = 4;
+  static const appearance = 1;
+  static const general = 5;
+  static const hosts = 6;
+  static const help = 7;
+}
+
 /// The measured geometry every settings-style row shares. Change it here and in
 /// `test/settings/settings_geometry_test.dart` together.
 ///

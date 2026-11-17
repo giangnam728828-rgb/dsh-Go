@@ -54,6 +54,7 @@ import '../update/update_tiles.dart' show UpdateBadge;
 import 'about_page.dart';
 import 'appearance/appearance_page.dart';
 import 'background_guide_page.dart';
+import 'backup_page.dart';
 import 'diagnostics_page.dart';
 import 'interface_page.dart';
 import 'language_tile.dart';
@@ -66,16 +67,6 @@ import 'search/settings_search_page.dart';
 import 'settings_widgets.dart';
 import 'system_access_page.dart';
 import 'voice_settings_page.dart';
-
-/// One hue per group on the hub: rows of a group share it.
-abstract final class SettingsHues {
-  static const ai = 0;
-  static const abilities = 4;
-  static const appearance = 1;
-  static const general = 5;
-  static const hosts = 6;
-  static const help = 7;
-}
 
 /// Settings hub: search, the overview card (account, balance, engine), then
 /// six groups by what people come to do — AI, 能力, 外观, 通用, 主机, 帮助与
@@ -277,6 +268,12 @@ class SettingsScreen extends ConsumerWidget {
               tint: SettingsHues.general,
               spot: SettingsIndex.entry(SettingsPageId.privacy),
               onTap: () => _push(context, const PrivacyPage()),
+            ),
+            SettingsTile(
+              icon: AppIcons.archive,
+              tint: SettingsHues.general,
+              spot: SettingsIndex.entry(SettingsPageId.backup),
+              onTap: () => _push(context, const BackupPage()),
             ),
           ],
         ),

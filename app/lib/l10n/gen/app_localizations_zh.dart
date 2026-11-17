@@ -1828,6 +1828,65 @@ class L10nZh extends L10n {
   String get androidShellErrorUnknown => '未能确认操作结果。先核实结果；已派发的命令不要自动重试。';
 
   @override
+  String get backupDataTitle => '备份与恢复';
+
+  @override
+  String get backupDataNote =>
+      '备份把本机的对话、设置、工作区和酒馆等数据打包成一个 ZIP，可以存到手机或分享出去。ZIP 里有模型密钥等凭据，请只放在自己信得过的地方。恢复前会先停止本机引擎并校验备份，校验不过不会改动现有数据；语音模型和引擎本体不在备份里。';
+
+  @override
+  String get backupNowTitle => '立即备份';
+
+  @override
+  String get backupNowSubtitle => '打包全部本机数据，保存或分享 ZIP';
+
+  @override
+  String get backupRestoreTitle => '从备份恢复';
+
+  @override
+  String get backupRestoreSubtitle => '选一个备份 ZIP，校验通过才替换现有数据';
+
+  @override
+  String get backupRestoreAction => '恢复';
+
+  @override
+  String get backupRestoreConfirmTitle => '用这个备份替换现在的数据？';
+
+  @override
+  String get backupRestoreConfirmMessage => '现在的对话、设置和工作区会被备份里的内容替换。恢复会先停止本机引擎；备份损坏或校验不通过时不会改动任何数据。建议先做一次备份。';
+
+  @override
+  String backupReady(int files, String size) {
+    return '备份已生成：$files 个文件，$size';
+  }
+
+  @override
+  String backupReadySkipped(int files, String size, int links) {
+    return '备份已生成：$files 个文件，$size；跳过了 $links 个符号链接';
+  }
+
+  @override
+  String backupFailed(String error) {
+    return '备份失败：$error';
+  }
+
+  @override
+  String backupRestored(int files) {
+    return '已恢复 $files 个文件，请关闭并重新打开 App 让设置生效';
+  }
+
+  @override
+  String backupRestoreFailed(String error) {
+    return '恢复失败，现有数据没有改动：$error';
+  }
+
+  @override
+  String get backupRestartFailed => '本机引擎没能重新启动，请到「本机引擎」里手动启动';
+
+  @override
+  String get searchKwBackup => '备份,恢复,还原,导出,导入,存档,打包,backup,restore,export,import,archive';
+
+  @override
   String get botsFolderGone => '这个文件夹已经不在了';
 
   @override

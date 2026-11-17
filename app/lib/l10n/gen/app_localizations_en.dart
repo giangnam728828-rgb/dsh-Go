@@ -1926,6 +1926,66 @@ class L10nEn extends L10n {
       'The outcome could not be confirmed. Verify it first; never automatically retry a dispatched command.';
 
   @override
+  String get backupDataTitle => 'Backup & restore';
+
+  @override
+  String get backupDataNote =>
+      'A backup packs this phone\'s chats, settings, workspace and tavern data into one ZIP you can keep or share. The ZIP contains credentials such as model API keys, so keep it somewhere you trust. Restoring stops the local engine first and checks the ZIP before anything is replaced, so a damaged file changes nothing. Voice models and the engine itself are not in the backup.';
+
+  @override
+  String get backupNowTitle => 'Back up now';
+
+  @override
+  String get backupNowSubtitle => 'Pack all on-device data into a ZIP you can save or share';
+
+  @override
+  String get backupRestoreTitle => 'Restore from a backup';
+
+  @override
+  String get backupRestoreSubtitle => 'Pick a backup ZIP; nothing is replaced until it passes checks';
+
+  @override
+  String get backupRestoreAction => 'Restore';
+
+  @override
+  String get backupRestoreConfirmTitle => 'Replace the current data with this backup?';
+
+  @override
+  String get backupRestoreConfirmMessage =>
+      'The chats, settings and workspace here will be replaced by the backup\'s. Restoring stops the local engine first, and a damaged or mismatched backup changes nothing. Backing up first is a good idea.';
+
+  @override
+  String backupReady(int files, String size) {
+    return 'Backup ready: $files files, $size';
+  }
+
+  @override
+  String backupReadySkipped(int files, String size, int links) {
+    return 'Backup ready: $files files, $size; skipped $links symbolic links';
+  }
+
+  @override
+  String backupFailed(String error) {
+    return 'Backup failed: $error';
+  }
+
+  @override
+  String backupRestored(int files) {
+    return 'Restored $files files. Close and reopen the app so every setting takes effect';
+  }
+
+  @override
+  String backupRestoreFailed(String error) {
+    return 'Restore failed and the current data was left as it was: $error';
+  }
+
+  @override
+  String get backupRestartFailed => 'The local engine did not start again. Start it from the local engine page';
+
+  @override
+  String get searchKwBackup => 'backup,restore,export,import,archive,snapshot,save';
+
+  @override
   String get botsFolderGone => 'This folder is gone';
 
   @override

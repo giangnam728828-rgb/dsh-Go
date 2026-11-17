@@ -29,6 +29,7 @@ import '../../share_hosted/hosted_links_page.dart';
 import '../about_page.dart';
 import '../appearance/appearance_page.dart';
 import '../background_guide_page.dart';
+import '../backup_page.dart';
 import '../diagnostics_page.dart';
 import '../interface_page.dart';
 import '../media_settings_page.dart';
@@ -88,6 +89,7 @@ Widget settingsPage(SettingsPageId id, {String? sessionId}) => switch (id) {
   SettingsPageId.personalization => const PersonalizationPage(),
   SettingsPageId.interface => const InterfacePage(),
   SettingsPageId.privacy => const PrivacyPage(),
+  SettingsPageId.backup => const BackupPage(),
   SettingsPageId.about => const AboutPage(),
 };
 
