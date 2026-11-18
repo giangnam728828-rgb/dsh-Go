@@ -3479,7 +3479,7 @@ abstract class L10n {
   /// No description provided for @backupDataNote.
   ///
   /// In zh, this message translates to:
-  /// **'备份把本机的对话、设置、工作区和酒馆等数据打包成一个 ZIP，可以存到手机或分享出去。ZIP 里有模型密钥等凭据，请只放在自己信得过的地方。恢复前会先停止本机引擎并校验备份，校验不过不会改动现有数据；语音模型和引擎本体不在备份里。'**
+  /// **'备份把本机的对话、设置、工作区、酒馆和 API key 等凭据打包成一个 ZIP，直接存到手机的 Download/DSH-Go。ZIP 不加密，谁拿到都能看到里面的密钥，请只放在自己信得过的地方。恢复前会先停止本机引擎并校验备份，校验不过不会改动现有数据；语音模型和引擎本体不在备份里。'**
   String get backupDataNote;
 
   /// No description provided for @backupNowTitle.
@@ -3491,7 +3491,7 @@ abstract class L10n {
   /// No description provided for @backupNowSubtitle.
   ///
   /// In zh, this message translates to:
-  /// **'打包全部本机数据，保存或分享 ZIP'**
+  /// **'打包全部本机数据（含 API key），存到手机的 Download/DSH-Go'**
   String get backupNowSubtitle;
 
   /// No description provided for @backupRestoreTitle.
@@ -3521,20 +3521,38 @@ abstract class L10n {
   /// No description provided for @backupRestoreConfirmMessage.
   ///
   /// In zh, this message translates to:
-  /// **'现在的对话、设置和工作区会被备份里的内容替换。恢复会先停止本机引擎；备份损坏或校验不通过时不会改动任何数据。建议先做一次备份。'**
+  /// **'现在的对话、设置、工作区和 API key 会被备份里的内容替换。恢复会先停止本机引擎；备份损坏或校验不通过时不会改动任何数据。建议先做一次备份。'**
   String get backupRestoreConfirmMessage;
 
   /// No description provided for @backupReady.
   ///
   /// In zh, this message translates to:
-  /// **'备份已生成：{files} 个文件，{size}'**
+  /// **'备份已生成：{files} 个文件，{size}，含 API key 等凭据（ZIP 未加密）'**
   String backupReady(int files, String size);
 
   /// No description provided for @backupReadySkipped.
   ///
   /// In zh, this message translates to:
-  /// **'备份已生成：{files} 个文件，{size}；跳过了 {links} 个符号链接'**
+  /// **'备份已生成：{files} 个文件，{size}，含 API key 等凭据；跳过了 {links} 个符号链接'**
   String backupReadySkipped(int files, String size, int links);
+
+  /// No description provided for @backupSavedTo.
+  ///
+  /// In zh, this message translates to:
+  /// **'已保存到 {where}：{files} 个文件，{size}，含 API key 等凭据（ZIP 未加密）'**
+  String backupSavedTo(String where, int files, String size);
+
+  /// No description provided for @backupSavedToSkipped.
+  ///
+  /// In zh, this message translates to:
+  /// **'已保存到 {where}：{files} 个文件，{size}，含 API key 等凭据；跳过了 {links} 个符号链接'**
+  String backupSavedToSkipped(String where, int files, String size, int links);
+
+  /// No description provided for @backupNoSecrets.
+  ///
+  /// In zh, this message translates to:
+  /// **'备份已保存，但系统密钥库读取失败，API key 没有写进这个 ZIP；换一台设备恢复会缺模型密钥'**
+  String get backupNoSecrets;
 
   /// No description provided for @backupFailed.
   ///
@@ -3547,6 +3565,12 @@ abstract class L10n {
   /// In zh, this message translates to:
   /// **'已恢复 {files} 个文件，请关闭并重新打开 App 让设置生效'**
   String backupRestored(int files);
+
+  /// No description provided for @backupRestoredSecrets.
+  ///
+  /// In zh, this message translates to:
+  /// **'已恢复 {files} 个文件（含 {secrets} 项 API key 等凭据），请关闭并重新打开 App'**
+  String backupRestoredSecrets(int files, int secrets);
 
   /// No description provided for @backupRestoreFailed.
   ///
@@ -3563,7 +3587,7 @@ abstract class L10n {
   /// No description provided for @searchKwBackup.
   ///
   /// In zh, this message translates to:
-  /// **'备份,恢复,还原,导出,导入,存档,打包,backup,restore,export,import,archive'**
+  /// **'备份,恢复,还原,导出,导入,存档,打包,key,apikey,凭据,密钥,backup,restore,export,import,archive'**
   String get searchKwBackup;
 
   /// No description provided for @botsFolderGone.

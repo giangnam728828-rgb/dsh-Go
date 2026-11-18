@@ -7,11 +7,18 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../runtime/local_paths.dart';
+import '../secrets/secure_storage.dart';
 
 const _format = 'dshgo-app-backup';
 const _version = 1;
 const _manifestName = 'manifest.json';
 const _manifestByteCap = 8 * 1024 * 1024;
+
+/// Ceilings for the credentials folded into the manifest, so a malformed ZIP
+/// cannot make the app write an unbounded blob into the system key store.
+const _secretKeyCap = 256;
+const _secretValueCap = 64 * 1024;
+const _secretByteCap = 2 * 1024 * 1024;
 
 /// App data kept under the application support directory. `runtime` (the
 /// engine's own rootfs), `speech` (downloaded voice models) and `workshop`
@@ -42,6 +49,8 @@ class AppBackupInfo {
     required this.fileCount,
     required this.totalBytes,
     required this.skippedLinks,
+    this.secretCount = 0,
+    this.secretsSaved = true,
   });
 
   final DateTime createdAt;
@@ -53,6 +62,16 @@ class AppBackupInfo {
   /// recorded and recreated; an absolute or escaping one is skipped and
   /// counted here.
   final int skippedLinks;
+
+  /// Model API keys, tavern channel keys and account tokens kept in the system
+  /// key store, written into the ZIP in clear text (the ZIP itself is not
+  /// encrypted). Zero when there were none or they could not be read.
+  final int secretCount;
+
+  /// False when the system key store could not be read: the ZIP then holds
+  /// chats, settings and workspace, but no API keys, and the page says so
+  /// instead of letting the person believe they were saved.
+  final bool secretsSaved;
 }
 
 /// Reads and restores the phone's user data without touching the installed
@@ -62,10 +81,16 @@ class AppBackupStore {
     Future<Directory> Function()? support,
     Future<Directory> Function()? engineHome,
     Future<SharedPreferences> Function()? preferences,
+    Future<Map<String, String>> Function()? readSecrets,
+    Future<void> Function(String key, String value)? writeSecret,
+    Future<void> Function(String key)? deleteSecret,
     DateTime Function()? now,
   }) : _support = support ?? getApplicationSupportDirectory,
        _engineHome = engineHome ?? _defaultEngineHome,
        _preferences = preferences ?? SharedPreferences.getInstance,
+       _readSecrets = readSecrets ?? (() => const AppSecureStorage().readAll()),
+       _writeSecret = writeSecret ?? ((key, value) => const AppSecureStorage().write(key: key, value: value)),
+       _deleteSecret = deleteSecret ?? ((key) => const AppSecureStorage().delete(key: key)),
        _now = now ?? DateTime.now;
 
   static Future<Directory> _defaultEngineHome() async {
@@ -76,6 +101,9 @@ class AppBackupStore {
   final Future<Directory> Function() _support;
   final Future<Directory> Function() _engineHome;
   final Future<SharedPreferences> Function() _preferences;
+  final Future<Map<String, String>> Function() _readSecrets;
+  final Future<void> Function(String key, String value) _writeSecret;
+  final Future<void> Function(String key) _deleteSecret;
   final DateTime Function() _now;
 
   Future<Map<String, Directory>> _targets() async {
@@ -92,6 +120,18 @@ class AppBackupStore {
   Future<AppBackupInfo> backup(String destinationPath) async {
     final targets = await _targets();
     final preferences = await _readPreferences(await _preferences());
+    // The system key store holds the model API keys and account tokens; a ZIP
+    // without them restores settings that cannot talk to any model. A key store
+    // that refuses to be read must not cost the person their chats, so the
+    // backup goes on and reports that the keys are missing.
+    Map<String, String> secrets;
+    var secretsSaved = true;
+    try {
+      secrets = await _readSecrets();
+    } catch (_) {
+      secrets = const {};
+      secretsSaved = false;
+    }
     final files = <_SourceFile>[];
     final links = <_SourceLink>[];
     final directories = <String>[];
@@ -153,6 +193,8 @@ class AppBackupStore {
       fileCount: files.length,
       totalBytes: totalBytes,
       skippedLinks: skippedLinks,
+      secretCount: secrets.length,
+      secretsSaved: secretsSaved,
     );
     final manifest = utf8.encode(
       jsonEncode({
@@ -163,6 +205,7 @@ class AppBackupStore {
         'roots': presentRoots,
         'directories': directories,
         'preferences': preferences,
+        'secrets': secrets,
         'files': [
           for (final file in files) {'path': file.path, 'size': file.size, 'sha256': file.hash},
         ],
@@ -214,9 +257,9 @@ class AppBackupStore {
   }
 
   /// Validates and extracts the whole archive before replacing any live root.
-  /// Existing roots are moved aside and put back if a swap or preference write
-  /// fails. Secure-storage keys are not part of SharedPreferences and remain
-  /// under the operating system's control.
+  /// Existing roots are moved aside and put back if a swap, a preference write
+  /// or a credential write fails; saved API keys and tokens go back into the
+  /// system key store last.
   Future<AppBackupInfo> restore(String archivePath) async {
     final support = await _support();
     await support.create(recursive: true);
@@ -239,6 +282,16 @@ class AppBackupStore {
 
       final preferences = await _preferences();
       final previousPreferences = await _readPreferences(preferences);
+      // Read before anything is replaced: if a key write fails, the old values
+      // go back. A key store that cannot be read leaves credentials alone
+      // rather than guess, while the chats and settings are still restored.
+      Map<String, String>? previousSecrets;
+      try {
+        previousSecrets = await _readSecrets();
+      } catch (_) {
+        previousSecrets = null;
+      }
+      final writtenSecrets = <String>{};
       final previous = Directory('${work.path}/previous');
       await previous.create();
       final actions = <_RestoreAction>[];
@@ -269,6 +322,7 @@ class AppBackupStore {
           }
         }
         await _writePreferences(preferences, manifest.preferences);
+        await _writeSecrets(manifest.secrets, writtenSecrets);
         // The archive leaves voice models and logs out on purpose; the copies
         // in the old tree are the only ones on the phone, so they move into the
         // restored tree. Failing here costs a download, never the restore.
@@ -280,6 +334,7 @@ class AppBackupStore {
         if (!mutated) rethrow;
         try {
           await _writePreferences(preferences, previousPreferences);
+          if (previousSecrets != null) await _restoreSecrets(previousSecrets, writtenSecrets);
           for (final action in actions.reversed) {
             if (action.installed &&
                 await FileSystemEntity.type(action.target.path, followLinks: false) != FileSystemEntityType.notFound) {
@@ -351,6 +406,31 @@ class AppBackupStore {
       if (!await ok) throw StateError('Could not save a preference');
     }
   }
+
+  /// Writes each saved credential, recording the keys already touched so a
+  /// failure halfway can put the previous values back.
+  Future<void> _writeSecrets(Map<String, String> values, Set<String> written) async {
+    for (final entry in values.entries) {
+      await _writeSecret(entry.key, entry.value);
+      written.add(entry.key);
+    }
+  }
+
+  /// Undoes [_writeSecrets]: keys the backup introduced go away, every key the
+  /// phone already had gets its old value back. Best effort by design — the
+  /// chats and settings rollback must not be lost to a stubborn key store.
+  Future<void> _restoreSecrets(Map<String, String> previous, Set<String> written) async {
+    for (final key in written.difference(previous.keys.toSet())) {
+      try {
+        await _deleteSecret(key);
+      } catch (_) {}
+    }
+    for (final entry in previous.entries) {
+      try {
+        await _writeSecret(entry.key, entry.value);
+      } catch (_) {}
+    }
+  }
 }
 
 class _SourceFile {
@@ -375,10 +455,11 @@ class _SourceLink {
 }
 
 class _Manifest {
-  const _Manifest(this.info, this.roots, this.preferences);
+  const _Manifest(this.info, this.roots, this.preferences, this.secrets);
   final AppBackupInfo info;
   final Set<String> roots;
   final Map<String, Object?> preferences;
+  final Map<String, String> secrets;
 }
 
 class _RestoreAction {
@@ -426,6 +507,9 @@ Future<_Manifest> _extract(String archivePath, Directory work, Directory incomin
     final preferencesValue = raw['preferences'];
     // Absent in backups written before links were recorded: nothing to keep.
     final linksValue = raw['links'] ?? const <Object?>[];
+    // Absent in backups written before credentials were saved: nothing to put
+    // back, and the old behaviour (leave the key store alone) is kept.
+    final secretsValue = raw['secrets'] ?? const <String, Object?>{};
     final skippedLinks = raw['skippedLinks'];
     if (created is! String ||
         DateTime.tryParse(created) == null ||
@@ -434,6 +518,7 @@ Future<_Manifest> _extract(String archivePath, Directory work, Directory incomin
         filesValue is! List ||
         linksValue is! List ||
         preferencesValue is! Map ||
+        secretsValue is! Map ||
         skippedLinks is! int ||
         skippedLinks < 0) {
       throw const FormatException('Invalid app backup manifest');
@@ -449,6 +534,22 @@ Future<_Manifest> _extract(String archivePath, Directory work, Directory incomin
       if (entry.key is! String) throw const FormatException('Invalid preference name');
       _checkPreference(entry.value);
       preferences[entry.key as String] = entry.value;
+    }
+    final secrets = <String, String>{};
+    var secretUnits = 0;
+    for (final entry in secretsValue.entries) {
+      final key = entry.key;
+      final value = entry.value;
+      if (key is! String ||
+          value is! String ||
+          key.isEmpty ||
+          key.length > _secretKeyCap ||
+          value.length > _secretValueCap) {
+        throw const FormatException('Invalid credential record');
+      }
+      secretUnits += key.length + value.length;
+      if (secretUnits > _secretByteCap) throw const FormatException('The backup holds too many credentials');
+      secrets[key] = value;
     }
 
     bool insidePresentRoot(String path, {required bool file}) =>
@@ -536,9 +637,11 @@ Future<_Manifest> _extract(String archivePath, Directory work, Directory incomin
         fileCount: files.length,
         totalBytes: totalBytes,
         skippedLinks: skippedLinks,
+        secretCount: secrets.length,
       ),
       roots,
       preferences,
+      secrets,
     );
   } finally {
     await input.close();

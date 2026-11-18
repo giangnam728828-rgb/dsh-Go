@@ -13,10 +13,19 @@ late Directory _support;
 late Directory _home;
 late SharedPreferences _prefs;
 
-AppBackupStore _store() => AppBackupStore(
+/// The system key store, in memory: model API keys and account tokens.
+late Map<String, String> _secrets;
+
+AppBackupStore _store({
+  Future<Map<String, String>> Function()? readSecrets,
+  Future<void> Function(String key, String value)? writeSecret,
+}) => AppBackupStore(
   support: () async => _support,
   engineHome: () async => _home,
   preferences: () async => _prefs,
+  readSecrets: readSecrets ?? () async => Map.of(_secrets),
+  writeSecret: writeSecret ?? (key, value) async => _secrets[key] = value,
+  deleteSecret: (key) async => _secrets.remove(key),
   now: () => DateTime.utc(2026, 11, 18, 9, 30),
 );
 
@@ -46,17 +55,20 @@ void main() {
     _write('root/.dsh/logs/app.log', 'log');
     SharedPreferences.setMockInitialValues({'keep': 'yes', 'count': 3});
     _prefs = await SharedPreferences.getInstance();
+    _secrets = {'provider.anthropic': 'sk-ant-1', 'tavern.channel.a': 'tv-1'};
   });
 
   tearDown(() async {
     if (await _temp.exists()) await _temp.delete(recursive: true);
   });
 
-  test('backup then restore returns every file and preference', () async {
+  test('backup then restore returns every file, preference and API key', () async {
     final archive = '${_temp.path}/out/backup.zip';
     final info = await _store().backup(archive);
     expect(info.fileCount, 6);
     expect(info.skippedLinks, 0);
+    expect(info.secretCount, 2);
+    expect(info.secretsSaved, isTrue);
     expect(File(archive).existsSync(), isTrue);
 
     // What the person does between the backup and the restore.
@@ -65,6 +77,8 @@ void main() {
     File('${_support.path}/tavern/characters/a.json').deleteSync();
     await _prefs.setString('keep', 'no');
     await _prefs.setBool('extra', true);
+    _secrets['provider.anthropic'] = 'sk-changed';
+    _secrets.remove('tavern.channel.a');
 
     final restored = await _store().restore(archive);
     expect(restored.fileCount, 6);
@@ -74,6 +88,8 @@ void main() {
     expect(_prefs.getString('keep'), 'yes');
     expect(_prefs.getInt('count'), 3);
     expect(_prefs.getBool('extra'), isNull);
+    // The model key and the channel token come back with the chats.
+    expect(_secrets, {'provider.anthropic': 'sk-ant-1', 'tavern.channel.a': 'tv-1'});
     // A folder the archive leaves out was carried over, not deleted.
     expect(_read('root/.dsh/speech-to-text/model.bin'), 'model');
   });
@@ -92,6 +108,45 @@ void main() {
     expect(Link('${_home.path}/workspace/note-link').existsSync(), isTrue);
     expect(File('${_home.path}/workspace/note-link').readAsStringSync(), 'original');
     expect(Link('${_home.path}/workspace/outside').existsSync(), isFalse);
+  });
+
+  test('a key store that cannot be read costs the keys, not the chats', () async {
+    final archive = '${_temp.path}/out/backup.zip';
+    final info = await _store(readSecrets: () async => throw StateError('keystore unavailable')).backup(archive);
+    expect(info.secretsSaved, isFalse);
+    expect(info.secretCount, 0);
+    expect(info.fileCount, 6);
+
+    // Restoring such a backup must not blank the keys already on the phone.
+    _secrets['provider.anthropic'] = 'sk-live';
+    _write('root/workspace/notes.txt', 'live');
+    await _store().restore(archive);
+    expect(_secrets['provider.anthropic'], 'sk-live');
+    expect(_secrets['tavern.channel.a'], 'tv-1');
+    expect(_read('root/workspace/notes.txt'), 'original');
+  });
+
+  test('a failed credential write puts files, settings and keys back', () async {
+    final archive = '${_temp.path}/out/backup.zip';
+    await _store().backup(archive);
+
+    _write('root/workspace/notes.txt', 'live');
+    await _prefs.setString('keep', 'no');
+    _secrets['provider.anthropic'] = 'sk-live';
+
+    // The first key is written, the second fails: both must end up as they were.
+    final restoration = _store(
+      writeSecret: (key, value) async {
+        if (key == 'tavern.channel.a') throw StateError('keystore full');
+        _secrets[key] = value;
+      },
+    );
+    await expectLater(restoration.restore(archive), throwsA(isA<StateError>()));
+
+    expect(_read('root/workspace/notes.txt'), 'live');
+    expect(_prefs.getString('keep'), 'no');
+    expect(_secrets['provider.anthropic'], 'sk-live');
+    expect(_secrets['tavern.channel.a'], 'tv-1');
   });
 
   test('a damaged archive changes nothing', () async {
@@ -118,9 +173,11 @@ void main() {
     await input.close();
 
     _write('root/workspace/notes.txt', 'live');
+    _secrets['provider.anthropic'] = 'sk-live';
     await expectLater(_store().restore('${_temp.path}/out/tampered.zip'), throwsA(isA<Object>()));
     expect(_read('root/workspace/notes.txt'), 'live');
     expect(_prefs.getString('keep'), 'yes');
+    expect(_secrets['provider.anthropic'], 'sk-live');
   });
 
   test('an existing destination is never overwritten', () async {

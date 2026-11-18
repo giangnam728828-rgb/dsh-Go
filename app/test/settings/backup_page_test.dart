@@ -55,7 +55,6 @@ void main() {
 
   Future<_Store> pump(WidgetTester tester, {String? picked = '/tmp/backup.zip'}) async {
     final store = _Store();
-    final shared = <String>[];
     tester.view.physicalSize = const Size(390, 844) * 2;
     tester.view.devicePixelRatio = 2;
     addTearDown(tester.view.reset);
@@ -65,7 +64,7 @@ void main() {
           overrides: [
             appBackupStoreProvider.overrideWithValue(store),
             appBackupDirProvider.overrideWithValue(() async => Directory.systemTemp),
-            appBackupShareProvider.overrideWithValue((path, name) async => shared.add(name)),
+            appBackupSaveProvider.overrideWithValue((path, name) async => 'Download/DSH-Go/$name'),
             appBackupPickerProvider.overrideWithValue(() async => picked),
             runtimeBridgeProvider.overrideWithValue(_NoRuntime()),
             localRuntimeProvider.overrideWith(
@@ -81,7 +80,7 @@ void main() {
     return store;
   }
 
-  testWidgets('立即备份 writes one ZIP and hands it to the share sheet', (tester) async {
+  testWidgets('立即备份 writes one ZIP and saves it to the phone', (tester) async {
     final store = await pump(tester);
     expect(find.text('立即备份'), findsOneWidget);
     expect(find.text('从备份恢复'), findsOneWidget);
@@ -90,7 +89,7 @@ void main() {
     await _settle(tester);
 
     expect(store.backedUp, endsWith('.zip'));
-    expect(find.textContaining('备份已生成'), findsOneWidget);
+    expect(find.textContaining('已保存到 Download/DSH-Go/'), findsOneWidget);
   });
 
   testWidgets('从备份恢复 asks first, then restores', (tester) async {

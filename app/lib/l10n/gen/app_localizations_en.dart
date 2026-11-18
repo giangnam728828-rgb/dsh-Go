@@ -1930,13 +1930,13 @@ class L10nEn extends L10n {
 
   @override
   String get backupDataNote =>
-      'A backup packs this phone\'s chats, settings, workspace and tavern data into one ZIP you can keep or share. The ZIP contains credentials such as model API keys, so keep it somewhere you trust. Restoring stops the local engine first and checks the ZIP before anything is replaced, so a damaged file changes nothing. Voice models and the engine itself are not in the backup.';
+      'A backup packs this phone\'s chats, settings, workspace, tavern data and credentials such as model API keys into one ZIP, saved straight to Download/DSH-Go on the phone. The ZIP is not encrypted, so anyone who opens it can read the keys: keep it somewhere you trust. Restoring stops the local engine first and checks the ZIP before anything is replaced, so a damaged file changes nothing. Voice models and the engine itself are not in the backup.';
 
   @override
   String get backupNowTitle => 'Back up now';
 
   @override
-  String get backupNowSubtitle => 'Pack all on-device data into a ZIP you can save or share';
+  String get backupNowSubtitle => 'Pack all on-device data, API keys included, into Download/DSH-Go';
 
   @override
   String get backupRestoreTitle => 'Restore from a backup';
@@ -1952,17 +1952,31 @@ class L10nEn extends L10n {
 
   @override
   String get backupRestoreConfirmMessage =>
-      'The chats, settings and workspace here will be replaced by the backup\'s. Restoring stops the local engine first, and a damaged or mismatched backup changes nothing. Backing up first is a good idea.';
+      'The chats, settings, workspace and API keys here will be replaced by the backup\'s. Restoring stops the local engine first, and a damaged or mismatched backup changes nothing. Backing up first is a good idea.';
 
   @override
   String backupReady(int files, String size) {
-    return 'Backup ready: $files files, $size';
+    return 'Backup ready: $files files, $size, including API keys and other credentials (ZIP is not encrypted)';
   }
 
   @override
   String backupReadySkipped(int files, String size, int links) {
-    return 'Backup ready: $files files, $size; skipped $links symbolic links';
+    return 'Backup ready: $files files, $size, including API keys and other credentials; skipped $links symbolic links';
   }
+
+  @override
+  String backupSavedTo(String where, int files, String size) {
+    return 'Saved to $where: $files files, $size, including API keys and other credentials (ZIP is not encrypted)';
+  }
+
+  @override
+  String backupSavedToSkipped(String where, int files, String size, int links) {
+    return 'Saved to $where: $files files, $size, including API keys and other credentials; skipped $links symbolic links';
+  }
+
+  @override
+  String get backupNoSecrets =>
+      'The backup was saved, but the system key store could not be read, so the API keys are not in this ZIP; a restore elsewhere would miss the model keys';
 
   @override
   String backupFailed(String error) {
@@ -1975,6 +1989,11 @@ class L10nEn extends L10n {
   }
 
   @override
+  String backupRestoredSecrets(int files, int secrets) {
+    return 'Restored $files files, including $secrets credentials such as API keys. Close and reopen the app';
+  }
+
+  @override
   String backupRestoreFailed(String error) {
     return 'Restore failed and the current data was left as it was: $error';
   }
@@ -1983,7 +2002,7 @@ class L10nEn extends L10n {
   String get backupRestartFailed => 'The local engine did not start again. Start it from the local engine page';
 
   @override
-  String get searchKwBackup => 'backup,restore,export,import,archive,snapshot,save';
+  String get searchKwBackup => 'backup,restore,export,import,archive,snapshot,save,key,apikey,credential,token';
 
   @override
   String get botsFolderGone => 'This folder is gone';
