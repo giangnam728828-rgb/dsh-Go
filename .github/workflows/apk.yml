@@ -66,14 +66,20 @@ jobs:
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
 
-      # runtime/tawcroot/source.json pins NDK 28.2.13676358; the image does not
-      # carry that exact version, and a release build refuses to skip it.
+      # runtime/tawcroot/source.json pins NDK 28.2.13676358; the image carries
+      # another revision and exports ANDROID_NDK_HOME for it, so the installed
+      # one is also pointed at explicitly.
       - name: Android NDK
         run: |
           sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           [ -x "$sdkmanager" ] || sdkmanager=$(command -v sdkmanager)
           yes | "$sdkmanager" --licenses >/dev/null
           "$sdkmanager" --install 'ndk;28.2.13676358'
+          ndk="$ANDROID_HOME/ndk/28.2.13676358"
+          [ -d "$ndk" ] || { echo "NDK 28.2.13676358 is not at $ndk" >&2; exit 1; }
+          echo "ANDROID_NDK_HOME=$ndk" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ndk" >> "$GITHUB_ENV"
+          grep 'Pkg.Revision' "$ndk/source.properties"
 
       # Shared with runtime.yml: downloads are hash-checked on every run, so a
       # stale cache only wastes disk, never correctness.
