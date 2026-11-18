@@ -22,7 +22,7 @@ class _Store extends AppBackupStore {
   Object? failure;
 
   @override
-  Future<AppBackupInfo> backup(String destinationPath) async {
+  Future<AppBackupInfo> backup(String destinationPath, {BackupSelection? selection}) async {
     if (failure != null) throw failure!;
     backedUp = destinationPath;
     File(destinationPath).writeAsBytesSync([0x50, 0x4b, 5, 6]);
@@ -80,16 +80,31 @@ void main() {
     return store;
   }
 
-  testWidgets('立即备份 writes one ZIP and saves it to the phone', (tester) async {
+  testWidgets('立即备份 asks for a range, then writes one ZIP', (tester) async {
     final store = await pump(tester);
     expect(find.text('立即备份'), findsOneWidget);
     expect(find.text('从备份恢复'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('settings-backup')));
     await _settle(tester);
+    expect(find.text('选择要备份的内容'), findsOneWidget);
+
+    await tester.tap(find.text('开始备份'));
+    await _settle(tester);
 
     expect(store.backedUp, endsWith('.zip'));
     expect(find.textContaining('已保存到 Download/DSH-Go/'), findsOneWidget);
+  });
+
+  testWidgets('cancelling the range backs nothing up', (tester) async {
+    final store = await pump(tester);
+
+    await tester.tap(find.byKey(const ValueKey('settings-backup')));
+    await _settle(tester);
+    await tester.tap(find.text('取消'));
+    await _settle(tester);
+
+    expect(store.backedUp, isNull);
   });
 
   testWidgets('从备份恢复 asks first, then restores', (tester) async {
@@ -122,6 +137,8 @@ void main() {
     store.failure = const FormatException('bad archive');
 
     await tester.tap(find.byKey(const ValueKey('settings-backup')));
+    await _settle(tester);
+    await tester.tap(find.text('开始备份'));
     await _settle(tester);
 
     expect(find.textContaining('备份失败'), findsOneWidget);

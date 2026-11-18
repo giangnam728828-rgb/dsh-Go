@@ -186,6 +186,47 @@ void main() {
     await expectLater(_store().backup(archive), throwsA(isA<FileSystemException>()));
   });
 
+  test('a partial backup restores only the selected directories', () async {
+    final archive = '${_temp.path}/out/partial.zip';
+    final info = await _store().backup(
+      archive,
+      selection: const BackupSelection(roots: {'engine/workspace'}, settings: true, secrets: false),
+    );
+    expect(info.fileCount, 1);
+
+    // Change everything, then restore the workspace-only backup.
+    _write('root/workspace/notes.txt', 'changed');
+    _write('root/.dsh/sessions/s2.jsonl', '{"turn":2}');
+    _write('support/tavern/characters/a.json', '{"name":"changed"}');
+    await _prefs.setString('keep', 'no');
+    _secrets['provider.anthropic'] = 'sk-live';
+
+    await _store().restore(archive);
+
+    expect(_read('root/workspace/notes.txt'), 'original');
+    // What the backup did not hold is left exactly as it was.
+    expect(_read('root/.dsh/sessions/s2.jsonl'), '{"turn":2}');
+    expect(_read('support/tavern/characters/a.json'), '{"name":"changed"}');
+    expect(_prefs.getString('keep'), 'yes');
+    expect(_secrets['provider.anthropic'], 'sk-live');
+  });
+
+  test('leaving settings out keeps the settings already on the phone', () async {
+    final archive = '${_temp.path}/out/no-settings.zip';
+    await _store().backup(
+      archive,
+      selection: const BackupSelection(roots: {'engine/workspace'}, settings: false, secrets: false),
+    );
+
+    await _prefs.setString('keep', 'no');
+    await _prefs.setBool('extra', true);
+
+    await _store().restore(archive);
+
+    expect(_prefs.getString('keep'), 'no');
+    expect(_prefs.getBool('extra'), isTrue);
+  });
+
   test('the file name and size read the way people expect', () {
     expect(appBackupName(DateTime(2026, 1, 2, 3, 4, 5)), 'dshgo-backup-20260102-030405.zip');
     expect(appBackupSize(2048), '2 KB');

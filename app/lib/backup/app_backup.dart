@@ -42,6 +42,40 @@ final _knownRoots = List<String>.unmodifiable([
   for (final name in _supportRoots) 'support/$name',
 ]);
 
+/// A group of phone data the person can include in a backup or leave out.
+///
+/// [BackupCategory.settings] and [BackupCategory.secrets] are not directories:
+/// the former lives in SharedPreferences, the latter in the system key store,
+/// and each is turned on or off by its own flag on [BackupSelection].
+enum BackupCategory { chats, workspace, agents, tavern, companion, appearance, settings, secrets }
+
+/// The data directories covered by each category. Every listed root is one of
+/// [_knownRoots]; the two non-file categories map to an empty list.
+const backupCategoryRoots = <BackupCategory, List<String>>{
+  BackupCategory.chats: ['engine/.dsh'],
+  BackupCategory.workspace: ['engine/workspace'],
+  BackupCategory.agents: ['engine/.agents'],
+  BackupCategory.tavern: ['support/tavern', 'support/tavern_avatars'],
+  BackupCategory.companion: ['support/companion', 'support/pets'],
+  BackupCategory.appearance: ['support/wallpaper', 'support/launch', 'support/call'],
+  BackupCategory.settings: <String>[],
+  BackupCategory.secrets: <String>[],
+};
+
+/// Which slices of the phone's data go into one backup. A partial selection
+/// still produces a complete, valid archive; a restore then replaces only the
+/// directories and flags this selection named.
+class BackupSelection {
+  const BackupSelection({required this.roots, required this.settings, required this.secrets});
+
+  /// Every data directory, all preferences and all credentials.
+  factory BackupSelection.full() => BackupSelection(roots: _knownRoots.toSet(), settings: true, secrets: true);
+
+  final Set<String> roots;
+  final bool settings;
+  final bool secrets;
+}
+
 /// Metadata of the immutable snapshot carried by an app backup.
 class AppBackupInfo {
   const AppBackupInfo({
@@ -117,20 +151,29 @@ class AppBackupStore {
 
   /// Writes a complete ZIP to [destinationPath], publishing it only after the
   /// encoder has closed successfully. No existing destination is overwritten.
-  Future<AppBackupInfo> backup(String destinationPath) async {
+  ///
+  /// [selection] narrows what goes in; the default is everything. A partial
+  /// backup records its scope in the manifest so a restore knows what not to
+  /// touch.
+  Future<AppBackupInfo> backup(String destinationPath, {BackupSelection? selection}) async {
+    final scope = selection ?? BackupSelection.full();
     final targets = await _targets();
-    final preferences = await _readPreferences(await _preferences());
+    final preferences = scope.settings ? await _readPreferences(await _preferences()) : const <String, Object?>{};
     // The system key store holds the model API keys and account tokens; a ZIP
     // without them restores settings that cannot talk to any model. A key store
     // that refuses to be read must not cost the person their chats, so the
     // backup goes on and reports that the keys are missing.
     Map<String, String> secrets;
     var secretsSaved = true;
-    try {
-      secrets = await _readSecrets();
-    } catch (_) {
+    if (scope.secrets) {
+      try {
+        secrets = await _readSecrets();
+      } catch (_) {
+        secrets = const {};
+        secretsSaved = false;
+      }
+    } else {
       secrets = const {};
-      secretsSaved = false;
     }
     final files = <_SourceFile>[];
     final links = <_SourceLink>[];
@@ -140,6 +183,7 @@ class AppBackupStore {
     var totalBytes = 0;
 
     for (final root in _knownRoots) {
+      if (!scope.roots.contains(root)) continue;
       final directory = targets[root]!;
       final excluded = _excluded[root] ?? const <String>{};
       final type = await FileSystemEntity.type(directory.path, followLinks: false);
@@ -206,6 +250,8 @@ class AppBackupStore {
         'directories': directories,
         'preferences': preferences,
         'secrets': secrets,
+        'includesSettings': scope.settings,
+        'includesSecrets': scope.secrets,
         'files': [
           for (final file in files) {'path': file.path, 'size': file.size, 'sha256': file.hash},
         ],
@@ -280,16 +326,23 @@ class AppBackupStore {
         }
       }
 
-      final preferences = await _preferences();
-      final previousPreferences = await _readPreferences(preferences);
+      // Only the slices the backup actually holds are touched: a partial
+      // backup must leave every other directory, preference and credential
+      // exactly as it is.
+      final preferences = manifest.includesSettings ? await _preferences() : null;
+      final previousPreferences = manifest.includesSettings
+          ? await _readPreferences(preferences!)
+          : const <String, Object?>{};
       // Read before anything is replaced: if a key write fails, the old values
       // go back. A key store that cannot be read leaves credentials alone
       // rather than guess, while the chats and settings are still restored.
       Map<String, String>? previousSecrets;
-      try {
-        previousSecrets = await _readSecrets();
-      } catch (_) {
-        previousSecrets = null;
+      if (manifest.includesSecrets) {
+        try {
+          previousSecrets = await _readSecrets();
+        } catch (_) {
+          previousSecrets = null;
+        }
       }
       final writtenSecrets = <String>{};
       final previous = Directory('${work.path}/previous');
@@ -298,10 +351,10 @@ class AppBackupStore {
       var mutated = false;
       try {
         for (final (index, root) in _knownRoots.indexed) {
+          if (!manifest.roots.contains(root)) continue;
           final target = targets[root]!;
           final source = Directory('${incoming.path}/$root');
           final old = Directory('${previous.path}/$index');
-          final hasSource = manifest.roots.contains(root);
           final hadTarget =
               await FileSystemEntity.type(target.path, followLinks: false) != FileSystemEntityType.notFound;
           final action = _RestoreAction(root, target, old, hadTarget);
@@ -312,17 +365,15 @@ class AppBackupStore {
             action.movedAside = true;
             mutated = true;
           }
-          if (hasSource) {
-            if (await FileSystemEntity.type(source.path, followLinks: false) != FileSystemEntityType.directory) {
-              throw FormatException('The restored root is missing: $root');
-            }
-            await source.rename(target.path);
-            action.installed = true;
-            mutated = true;
+          if (await FileSystemEntity.type(source.path, followLinks: false) != FileSystemEntityType.directory) {
+            throw FormatException('The restored root is missing: $root');
           }
+          await source.rename(target.path);
+          action.installed = true;
+          mutated = true;
         }
-        await _writePreferences(preferences, manifest.preferences);
-        await _writeSecrets(manifest.secrets, writtenSecrets);
+        if (manifest.includesSettings) await _writePreferences(preferences!, manifest.preferences);
+        if (manifest.includesSecrets) await _writeSecrets(manifest.secrets, writtenSecrets);
         // The archive leaves voice models and logs out on purpose; the copies
         // in the old tree are the only ones on the phone, so they move into the
         // restored tree. Failing here costs a download, never the restore.
@@ -333,8 +384,10 @@ class AppBackupStore {
       } catch (error, stack) {
         if (!mutated) rethrow;
         try {
-          await _writePreferences(preferences, previousPreferences);
-          if (previousSecrets != null) await _restoreSecrets(previousSecrets, writtenSecrets);
+          if (manifest.includesSettings) await _writePreferences(preferences!, previousPreferences);
+          if (manifest.includesSecrets && previousSecrets != null) {
+            await _restoreSecrets(previousSecrets, writtenSecrets);
+          }
           for (final action in actions.reversed) {
             if (action.installed &&
                 await FileSystemEntity.type(action.target.path, followLinks: false) != FileSystemEntityType.notFound) {
@@ -455,11 +508,13 @@ class _SourceLink {
 }
 
 class _Manifest {
-  const _Manifest(this.info, this.roots, this.preferences, this.secrets);
+  const _Manifest(this.info, this.roots, this.preferences, this.secrets, this.includesSettings, this.includesSecrets);
   final AppBackupInfo info;
   final Set<String> roots;
   final Map<String, Object?> preferences;
   final Map<String, String> secrets;
+  final bool includesSettings;
+  final bool includesSecrets;
 }
 
 class _RestoreAction {
@@ -510,6 +565,10 @@ Future<_Manifest> _extract(String archivePath, Directory work, Directory incomin
     // Absent in backups written before credentials were saved: nothing to put
     // back, and the old behaviour (leave the key store alone) is kept.
     final secretsValue = raw['secrets'] ?? const <String, Object?>{};
+    // Backups written before ranges could be chosen held everything, so a
+    // missing flag means both settings and credentials are in.
+    final includesSettings = raw['includesSettings'] ?? true;
+    final includesSecrets = raw['includesSecrets'] ?? true;
     final skippedLinks = raw['skippedLinks'];
     if (created is! String ||
         DateTime.tryParse(created) == null ||
@@ -519,6 +578,8 @@ Future<_Manifest> _extract(String archivePath, Directory work, Directory incomin
         linksValue is! List ||
         preferencesValue is! Map ||
         secretsValue is! Map ||
+        includesSettings is! bool ||
+        includesSecrets is! bool ||
         skippedLinks is! int ||
         skippedLinks < 0) {
       throw const FormatException('Invalid app backup manifest');
@@ -642,6 +703,8 @@ Future<_Manifest> _extract(String archivePath, Directory work, Directory incomin
       roots,
       preferences,
       secrets,
+      includesSettings,
+      includesSecrets,
     );
   } finally {
     await input.close();

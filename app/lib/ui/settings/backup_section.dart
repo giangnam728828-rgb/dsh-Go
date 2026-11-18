@@ -132,10 +132,90 @@ class _BackupSettingsSectionState extends ConsumerState<BackupSettingsSection> {
     }
   }
 
+  /// Asks which slices of the phone's data to pack, or returns null when the
+  /// person cancels. Everything is on by default.
+  Future<BackupSelection?> _pickScope(L10n l10n) async {
+    final categories = [
+      (BackupCategory.chats, l10n.backupCatChatsLabel, l10n.backupCatChatsDesc),
+      (BackupCategory.workspace, l10n.backupCatWorkspaceLabel, l10n.backupCatWorkspaceDesc),
+      (BackupCategory.agents, l10n.backupCatAgentsLabel, l10n.backupCatAgentsDesc),
+      (BackupCategory.tavern, l10n.backupCatTavernLabel, l10n.backupCatTavernDesc),
+      (BackupCategory.companion, l10n.backupCatCompanionLabel, l10n.backupCatCompanionDesc),
+      (BackupCategory.appearance, l10n.backupCatAppearanceLabel, l10n.backupCatAppearanceDesc),
+      (BackupCategory.settings, l10n.backupCatSettingsLabel, l10n.backupCatSettingsDesc),
+      (BackupCategory.secrets, l10n.backupCatSecretsLabel, l10n.backupCatSecretsDesc),
+    ];
+    var selected = BackupCategory.values.toSet();
+    return showDialog<BackupSelection>(
+      context: context,
+      builder: (dialog) => StatefulBuilder(
+        builder: (context, setState) {
+          final all = selected.length == categories.length;
+          final none = selected.isEmpty;
+          return AlertDialog(
+            title: Text(l10n.backupScopeTitle),
+            content: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final (category, label, description) in categories)
+                      CheckboxListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        title: Text(label),
+                        subtitle: Text(description),
+                        value: selected.contains(category),
+                        onChanged: (on) => setState(() {
+                          if (on == true) {
+                            selected.add(category);
+                          } else {
+                            selected.remove(category);
+                          }
+                        }),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => setState(() {
+                  selected = all ? <BackupCategory>{} : BackupCategory.values.toSet();
+                }),
+                child: Text(all ? l10n.backupScopeNone : l10n.backupScopeAll),
+              ),
+              TextButton(onPressed: () => Navigator.of(dialog).pop(), child: Text(l10n.commonCancel)),
+              TextButton(
+                onPressed: none
+                    ? null
+                    : () => Navigator.of(dialog).pop(
+                        BackupSelection(
+                          roots: {
+                            for (final category in selected)
+                              for (final root in backupCategoryRoots[category]!) root,
+                          },
+                          settings: selected.contains(BackupCategory.settings),
+                          secrets: selected.contains(BackupCategory.secrets),
+                        ),
+                      ),
+                child: Text(l10n.backupScopeConfirm),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   Future<void> _backup() async {
     if (_work != null) return;
     final l10n = context.l10n;
     final messenger = ScaffoldMessenger.maybeOf(context);
+    final selection = await _pickScope(l10n);
+    if (selection == null || !mounted) return;
     setState(() => _work = _BackupWork.backup);
     var restart = false;
     var discard = false;
@@ -145,7 +225,7 @@ class _BackupSettingsSectionState extends ConsumerState<BackupSettingsSection> {
       final directory = await ref.read(appBackupDirProvider)();
       final name = appBackupName(DateTime.now());
       path = '${directory.path}/$name';
-      final info = await ref.read(appBackupStoreProvider).backup(path);
+      final info = await ref.read(appBackupStoreProvider).backup(path, selection: selection);
       final where = await ref.read(appBackupSaveProvider)(path, name);
       discard = true;
       messenger?.showBriefNotice(_backupNotice(l10n, info, where));

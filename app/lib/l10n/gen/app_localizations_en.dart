@@ -1930,19 +1930,79 @@ class L10nEn extends L10n {
 
   @override
   String get backupDataNote =>
-      'A backup packs this phone\'s chats, settings, workspace, tavern data and credentials such as model API keys into one ZIP, saved straight to Download/DSH-Go on the phone. The ZIP is not encrypted, so anyone who opens it can read the keys: keep it somewhere you trust. Restoring stops the local engine first and checks the ZIP before anything is replaced, so a damaged file changes nothing. Voice models and the engine itself are not in the backup.';
+      'A backup packs this phone\'s data into one ZIP, saved straight to Download/DSH-Go. \"Back up now\" lets you choose what goes in; anything left out is not touched. The ZIP is not encrypted, so anyone who opens it can read the keys: keep it somewhere you trust. Restoring stops the local engine first and checks the ZIP before anything is replaced, so a damaged file changes nothing. Voice models and the engine itself are not in the backup.';
 
   @override
   String get backupNowTitle => 'Back up now';
 
   @override
-  String get backupNowSubtitle => 'Pack all on-device data, API keys included, into Download/DSH-Go';
+  String get backupNowSubtitle => 'Choose what to back up, then save the ZIP to Download/DSH-Go';
 
   @override
   String get backupRestoreTitle => 'Restore from a backup';
 
   @override
-  String get backupRestoreSubtitle => 'Pick a backup ZIP; nothing is replaced until it passes checks';
+  String get backupRestoreSubtitle => 'Pick a backup ZIP; only what it holds is replaced';
+
+  @override
+  String get backupScopeTitle => 'Choose what to back up';
+
+  @override
+  String get backupScopeAll => 'All';
+
+  @override
+  String get backupScopeNone => 'None';
+
+  @override
+  String get backupScopeConfirm => 'Back up';
+
+  @override
+  String get backupCatChatsLabel => 'Chats & memory';
+
+  @override
+  String get backupCatChatsDesc => 'Chat history, long-term memory, skills and plugins';
+
+  @override
+  String get backupCatWorkspaceLabel => 'Workspace files';
+
+  @override
+  String get backupCatWorkspaceDesc => 'Files the AI wrote and chat attachments';
+
+  @override
+  String get backupCatAgentsLabel => 'Agent configuration';
+
+  @override
+  String get backupCatAgentsDesc => 'Agent settings and conventions';
+
+  @override
+  String get backupCatTavernLabel => 'Tavern & characters';
+
+  @override
+  String get backupCatTavernDesc => 'Character cards, avatars and tavern settings';
+
+  @override
+  String get backupCatCompanionLabel => 'Companion & pets';
+
+  @override
+  String get backupCatCompanionDesc => 'Companion and pet data';
+
+  @override
+  String get backupCatAppearanceLabel => 'Wallpaper & looks';
+
+  @override
+  String get backupCatAppearanceDesc => 'Wallpaper, launch image and call background';
+
+  @override
+  String get backupCatSettingsLabel => 'App settings';
+
+  @override
+  String get backupCatSettingsDesc => 'Preferences';
+
+  @override
+  String get backupCatSecretsLabel => 'API keys & credentials';
+
+  @override
+  String get backupCatSecretsDesc => 'Model keys and account tokens (ZIP is not encrypted)';
 
   @override
   String get backupRestoreAction => 'Restore';
@@ -1952,26 +2012,26 @@ class L10nEn extends L10n {
 
   @override
   String get backupRestoreConfirmMessage =>
-      'The chats, settings, workspace and API keys here will be replaced by the backup\'s. Restoring stops the local engine first, and a damaged or mismatched backup changes nothing. Backing up first is a good idea.';
+      'What the backup holds will be replaced; everything else stays as it is. Restoring stops the local engine first, and a damaged or mismatched backup changes nothing. Backing up first is a good idea.';
 
   @override
   String backupReady(int files, String size) {
-    return 'Backup ready: $files files, $size, including API keys and other credentials (ZIP is not encrypted)';
+    return 'Backup ready: $files files, $size (ZIP is not encrypted)';
   }
 
   @override
   String backupReadySkipped(int files, String size, int links) {
-    return 'Backup ready: $files files, $size, including API keys and other credentials; skipped $links symbolic links';
+    return 'Backup ready: $files files, $size; skipped $links symbolic links';
   }
 
   @override
   String backupSavedTo(String where, int files, String size) {
-    return 'Saved to $where: $files files, $size, including API keys and other credentials (ZIP is not encrypted)';
+    return 'Saved to $where: $files files, $size (ZIP is not encrypted)';
   }
 
   @override
   String backupSavedToSkipped(String where, int files, String size, int links) {
-    return 'Saved to $where: $files files, $size, including API keys and other credentials; skipped $links symbolic links';
+    return 'Saved to $where: $files files, $size; skipped $links symbolic links';
   }
 
   @override
@@ -2002,7 +2062,8 @@ class L10nEn extends L10n {
   String get backupRestartFailed => 'The local engine did not start again. Start it from the local engine page';
 
   @override
-  String get searchKwBackup => 'backup,restore,export,import,archive,snapshot,save,key,apikey,credential,token';
+  String get searchKwBackup =>
+      'backup,restore,export,import,archive,snapshot,scope,choose,save,key,apikey,credential,token';
 
   @override
   String get botsFolderGone => 'This folder is gone';

@@ -1832,19 +1832,79 @@ class L10nZh extends L10n {
 
   @override
   String get backupDataNote =>
-      '备份把本机的对话、设置、工作区、酒馆和 API key 等凭据打包成一个 ZIP，直接存到手机的 Download/DSH-Go。ZIP 不加密，谁拿到都能看到里面的密钥，请只放在自己信得过的地方。恢复前会先停止本机引擎并校验备份，校验不过不会改动现有数据；语音模型和引擎本体不在备份里。';
+      '备份把本机数据打包成一个 ZIP，直接存到手机的 Download/DSH-Go。点「立即备份」可以选择要备份哪些内容，没选的部分不会被改动。ZIP 不加密，谁拿到都能看到里面的密钥，请只放在自己信得过的地方。恢复前会先停止本机引擎并校验备份，校验不过不会改动现有数据；语音模型和引擎本体不在备份里。';
 
   @override
   String get backupNowTitle => '立即备份';
 
   @override
-  String get backupNowSubtitle => '打包全部本机数据（含 API key），存到手机的 Download/DSH-Go';
+  String get backupNowSubtitle => '选择要备份的内容，打包后存到手机的 Download/DSH-Go';
 
   @override
   String get backupRestoreTitle => '从备份恢复';
 
   @override
-  String get backupRestoreSubtitle => '选一个备份 ZIP，校验通过才替换现有数据';
+  String get backupRestoreSubtitle => '选一个备份 ZIP，校验通过才替换备份里包含的数据';
+
+  @override
+  String get backupScopeTitle => '选择要备份的内容';
+
+  @override
+  String get backupScopeAll => '全选';
+
+  @override
+  String get backupScopeNone => '全不选';
+
+  @override
+  String get backupScopeConfirm => '开始备份';
+
+  @override
+  String get backupCatChatsLabel => '对话与记忆';
+
+  @override
+  String get backupCatChatsDesc => '聊天记录、长期记忆、技能与插件';
+
+  @override
+  String get backupCatWorkspaceLabel => '工作区文件';
+
+  @override
+  String get backupCatWorkspaceDesc => '让 AI 写的文件和聊天里的附件';
+
+  @override
+  String get backupCatAgentsLabel => '智能体配置';
+
+  @override
+  String get backupCatAgentsDesc => 'agents 的配置与约定';
+
+  @override
+  String get backupCatTavernLabel => '酒馆与角色';
+
+  @override
+  String get backupCatTavernDesc => '角色卡、头像和酒馆设置';
+
+  @override
+  String get backupCatCompanionLabel => '伴侣与宠物';
+
+  @override
+  String get backupCatCompanionDesc => '伴侣、宠物的数据';
+
+  @override
+  String get backupCatAppearanceLabel => '壁纸与外观';
+
+  @override
+  String get backupCatAppearanceDesc => '壁纸、启动图和通话背景';
+
+  @override
+  String get backupCatSettingsLabel => '应用设置';
+
+  @override
+  String get backupCatSettingsDesc => '偏好设置';
+
+  @override
+  String get backupCatSecretsLabel => 'API key 等凭据';
+
+  @override
+  String get backupCatSecretsDesc => '模型密钥和账号令牌（ZIP 不加密）';
 
   @override
   String get backupRestoreAction => '恢复';
@@ -1853,26 +1913,26 @@ class L10nZh extends L10n {
   String get backupRestoreConfirmTitle => '用这个备份替换现在的数据？';
 
   @override
-  String get backupRestoreConfirmMessage => '现在的对话、设置、工作区和 API key 会被备份里的内容替换。恢复会先停止本机引擎；备份损坏或校验不通过时不会改动任何数据。建议先做一次备份。';
+  String get backupRestoreConfirmMessage => '备份里包含的内容会被替换，其余数据保持原样。恢复会先停止本机引擎；备份损坏或校验不通过时不会改动任何数据。建议先做一次备份。';
 
   @override
   String backupReady(int files, String size) {
-    return '备份已生成：$files 个文件，$size，含 API key 等凭据（ZIP 未加密）';
+    return '备份已生成：$files 个文件，$size（ZIP 未加密）';
   }
 
   @override
   String backupReadySkipped(int files, String size, int links) {
-    return '备份已生成：$files 个文件，$size，含 API key 等凭据；跳过了 $links 个符号链接';
+    return '备份已生成：$files 个文件，$size；跳过了 $links 个符号链接';
   }
 
   @override
   String backupSavedTo(String where, int files, String size) {
-    return '已保存到 $where：$files 个文件，$size，含 API key 等凭据（ZIP 未加密）';
+    return '已保存到 $where：$files 个文件，$size（ZIP 未加密）';
   }
 
   @override
   String backupSavedToSkipped(String where, int files, String size, int links) {
-    return '已保存到 $where：$files 个文件，$size，含 API key 等凭据；跳过了 $links 个符号链接';
+    return '已保存到 $where：$files 个文件，$size；跳过了 $links 个符号链接';
   }
 
   @override
@@ -1902,7 +1962,7 @@ class L10nZh extends L10n {
   String get backupRestartFailed => '本机引擎没能重新启动，请到「本机引擎」里手动启动';
 
   @override
-  String get searchKwBackup => '备份,恢复,还原,导出,导入,存档,打包,key,apikey,凭据,密钥,backup,restore,export,import,archive';
+  String get searchKwBackup => '备份,恢复,还原,导出,导入,存档,打包,范围,选择,勾选,key,apikey,凭据,密钥,backup,restore,export,import,archive';
 
   @override
   String get botsFolderGone => '这个文件夹已经不在了';
