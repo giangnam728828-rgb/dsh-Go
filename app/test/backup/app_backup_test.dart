@@ -78,6 +78,22 @@ void main() {
     expect(_read('root/.dsh/speech-to-text/model.bin'), 'model');
   });
 
+  test('relative links inside a root are recreated; links leaving it are not', () async {
+    Link('${_home.path}/workspace/note-link').createSync('notes.txt');
+    Link('${_home.path}/workspace/outside').createSync('/etc/hostname');
+    final archive = '${_temp.path}/out/backup.zip';
+    final info = await _store().backup(archive);
+    expect(info.skippedLinks, 1);
+
+    await File('${_home.path}/workspace/notes.txt').delete();
+    await Link('${_home.path}/workspace/note-link').delete();
+    await _store().restore(archive);
+
+    expect(Link('${_home.path}/workspace/note-link').existsSync(), isTrue);
+    expect(File('${_home.path}/workspace/note-link').readAsStringSync(), 'original');
+    expect(Link('${_home.path}/workspace/outside').existsSync(), isFalse);
+  });
+
   test('a damaged archive changes nothing', () async {
     final archive = '${_temp.path}/out/backup.zip';
     await _store().backup(archive);

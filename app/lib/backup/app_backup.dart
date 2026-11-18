@@ -48,8 +48,10 @@ class AppBackupInfo {
   final int fileCount;
   final int totalBytes;
 
-  /// Symbolic links are not followed: a link may point outside the app or back
-  /// into its own tree. Regular files and directories are always included.
+  /// Symbolic links are never followed: a link may point outside the app or
+  /// back into its own tree. A relative link that stays inside its root is
+  /// recorded and recreated; an absolute or escaping one is skipped and
+  /// counted here.
   final int skippedLinks;
 }
 
@@ -91,6 +93,7 @@ class AppBackupStore {
     final targets = await _targets();
     final preferences = await _readPreferences(await _preferences());
     final files = <_SourceFile>[];
+    final links = <_SourceLink>[];
     final directories = <String>[];
     final presentRoots = <String>[];
     var skippedLinks = 0;
@@ -124,6 +127,16 @@ class AppBackupStore {
             final size = await file.length();
             files.add(_SourceFile(relative, file, size, await _hash(file)));
             totalBytes += size;
+          } else if (childType == FileSystemEntityType.link) {
+            // pnpm's node_modules is a tree of relative links; keeping them is
+            // what lets a restored engine profile boot. Links that leave the
+            // root (or name an absolute path) are not recreated.
+            final target = await Link(entity.path).target();
+            if (_linkTarget(relative, target) == null) {
+              skippedLinks++;
+            } else {
+              links.add(_SourceLink(relative, target));
+            }
           } else {
             skippedLinks++;
           }
@@ -152,6 +165,9 @@ class AppBackupStore {
         'preferences': preferences,
         'files': [
           for (final file in files) {'path': file.path, 'size': file.size, 'sha256': file.hash},
+        ],
+        'links': [
+          for (final link in links) {'path': link.path, 'target': link.target},
         ],
       }),
     );
@@ -352,6 +368,12 @@ class _ManifestFile {
   final String hash;
 }
 
+class _SourceLink {
+  const _SourceLink(this.path, this.target);
+  final String path;
+  final String target;
+}
+
 class _Manifest {
   const _Manifest(this.info, this.roots, this.preferences);
   final AppBackupInfo info;
@@ -402,12 +424,15 @@ Future<_Manifest> _extract(String archivePath, Directory work, Directory incomin
     final directoriesValue = raw['directories'];
     final filesValue = raw['files'];
     final preferencesValue = raw['preferences'];
+    // Absent in backups written before links were recorded: nothing to keep.
+    final linksValue = raw['links'] ?? const <Object?>[];
     final skippedLinks = raw['skippedLinks'];
     if (created is! String ||
         DateTime.tryParse(created) == null ||
         rootsValue is! List ||
         directoriesValue is! List ||
         filesValue is! List ||
+        linksValue is! List ||
         preferencesValue is! Map ||
         skippedLinks is! int ||
         skippedLinks < 0) {
@@ -454,6 +479,23 @@ Future<_Manifest> _extract(String archivePath, Directory work, Directory incomin
       files.add(_ManifestFile(path, size, hash));
       totalBytes += size;
     }
+    final links = <_SourceLink>[];
+    final linkPaths = <String>{};
+    for (final value in linksValue) {
+      if (value is! Map) throw const FormatException('Invalid backup link');
+      final path = value['path'];
+      final target = value['target'];
+      if (path is! String || target is! String) throw const FormatException('Invalid backup link record');
+      _checkRelativePath(path);
+      if (!insidePresentRoot(path, file: true) ||
+          !linkPaths.add(path) ||
+          filePaths.contains(path) ||
+          directories.contains(path) ||
+          _linkTarget(path, target) == null) {
+        throw const FormatException('Invalid or duplicate backup link');
+      }
+      links.add(_SourceLink(path, target));
+    }
     final expected = <String>{
       _manifestName,
       'data',
@@ -482,6 +524,11 @@ Future<_Manifest> _extract(String archivePath, Directory work, Directory incomin
       if (await destination.length() != file.size || await _hash(destination) != file.hash) {
         throw FormatException('Backup checksum does not match: ${file.path}');
       }
+    }
+    for (final link in links) {
+      final destination = Link('${incoming.path}/${link.path}');
+      await destination.parent.create(recursive: true);
+      await destination.create(link.target);
     }
     return _Manifest(
       AppBackupInfo(
@@ -522,6 +569,24 @@ void _checkRelativePath(String path) {
       parts.any((part) => part.isEmpty || part == '.' || part == '..')) {
     throw FormatException('Unsafe backup path: $path');
   }
+}
+
+/// Where a link stored at [linkPath] lands, or null when it is absolute,
+/// malformed, or climbs out of its root (a link must never reach a file the
+/// backup does not own).
+String? _linkTarget(String linkPath, String target) {
+  if (target.isEmpty || target.startsWith('/') || target.contains('\\') || target.contains('\x00')) return null;
+  final parts = linkPath.split('/')..removeLast();
+  for (final part in target.split('/')) {
+    if (part.isEmpty || part == '.') continue;
+    if (part == '..') {
+      if (parts.isEmpty) return null;
+      parts.removeLast();
+    } else {
+      parts.add(part);
+    }
+  }
+  return parts.isEmpty ? null : parts.join('/');
 }
 
 void _checkPreference(Object? value) {
