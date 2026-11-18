@@ -1,0 +1,168 @@
+# Builds an installable APK on GitHub's runners, so a phone with no Android
+# toolchain can still get one.
+#
+#   Actions › Build APK › Run workflow   → the APK is in that run's Artifacts
+#   push a tag v1.2.3                    → the APK is attached to that Release
+#
+# The bundled runtime is built here too, exactly as runtime.yml does it: release
+# APKs package runtime/out/…, which is not tracked, so a plain `flutter build`
+# would stop at tooling/check_runtime_bundle.py.
+name: Build APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      flavor:
+        description: Which ABI to build
+        type: choice
+        options: [arm64, x64, all]
+        default: arm64
+      build_name:
+        description: 'Version name (empty: app/pubspec.yaml)'
+        required: false
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # attach the APK to a tag's release
+  actions: read
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: 3.47.7
+  GRADLE_VERSION: 9.3.1
+  TZ: Asia/Shanghai
+  # Set but empty on purpose: build-apk.sh only reads a token from a non-empty
+  # file, so a public build can never pick up the beta channel feed.
+  DSH_BETA_TOKEN_FILE: ''
+  DSH_MAVEN_MIRRORS: 0 # the Aliyun mirrors are slow and unreliable from a US runner
+
+jobs:
+  apk:
+    name: APK (${{ inputs.flavor || 'arm64' }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      # gradlew is not tracked, so `flutter build apk` uses the gradle on PATH.
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      # runtime/tawcroot/source.json pins NDK 28.2.13676358; the image does not
+      # carry that exact version, and a release build refuses to skip it.
+      - name: Android NDK
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$sdkmanager" ] || sdkmanager=$(command -v sdkmanager)
+          yes | "$sdkmanager" --licenses >/dev/null
+          "$sdkmanager" --install 'ndk;28.2.13676358'
+
+      # Shared with runtime.yml: downloads are hash-checked on every run, so a
+      # stale cache only wastes disk, never correctness.
+      - name: Restore the runtime download cache
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime/.cache
+          key: runtime-downloads-v1-${{ hashFiles('runtime/build-runtime.sh', 'runtime/locks/**') }}
+          restore-keys: runtime-downloads-v1-
+
+      - name: Build the bundled runtime
+        run: |
+          flavor='${{ inputs.flavor }}'
+          case "${flavor:-arm64}" in
+            arm64) runtime/build-runtime.sh arm64-v8a ;;
+            x64) runtime/build-runtime.sh x86_64 ;;
+            all) runtime/build-runtime.sh ;;
+          esac
+
+      - name: Check the bundle
+        run: |
+          flavor='${{ inputs.flavor }}'
+          if [ "${flavor:-arm64}" = all ]; then
+            python3 -I tooling/check_runtime_bundle.py arm64 x64
+          else
+            python3 -I tooling/check_runtime_bundle.py "${flavor:-arm64}"
+          fi
+
+      - name: Save the runtime download cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime/.cache
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+      - name: Flutter packages
+        working-directory: app
+        run: flutter pub get --enforce-lockfile
+
+      # Optional release key: with these four secrets set the APK can update an
+      # installed copy of the same key instead of asking for an uninstall (which
+      # would take the phone's data with it). Without them the build is
+      # debug-signed, as every local build is.
+      - name: Release key
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE" ]; then
+            echo "No release key secrets; the APK will be debug-signed."
+            exit 0
+          fi
+          mkdir -p "$RUNNER_TEMP/keys"
+          printf '%s' "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/keys/release.jks"
+          cat > app/android/key.properties <<EOF
+          storeFile=$RUNNER_TEMP/keys/release.jks
+          storePassword=$STORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+          chmod 600 app/android/key.properties
+
+      - name: Build the APK
+        env:
+          BUILD_NAME: ${{ inputs.build_name }}
+        run: |
+          name=()
+          [ -z "$BUILD_NAME" ] || name=(--build-name "$BUILD_NAME")
+          bash tooling/build-apk.sh -f '${{ inputs.flavor || 'arm64' }}' "${name[@]}" --keep-daemon
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: apk-${{ inputs.flavor || 'arm64' }}
+          path: app/build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach the APK to the tag's release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" app/build/app/outputs/flutter-apk/*.apk --clobber
+          else
+            gh release create "$tag" app/build/app/outputs/flutter-apk/*.apk \
+              --title "$tag" --notes "Built from $GITHUB_SHA." --verify-tag
+          fi
