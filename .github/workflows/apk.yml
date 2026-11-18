@@ -163,15 +163,17 @@ jobs:
           SIGNED: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
           WANT: BF:F8:D3:0A:FC:76:96:D2:DB:28:E6:8F:64:59:11:A1:F1:EA:A0:D5:56:48:9A:28:5D:A4:4E:8B:B2:32:FA:7C
         run: |
-          apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner
-          [ -x "$apksigner" ] || { echo "apksigner not found" >&2; exit 1; }
+          # The APK carries a v1 (JAR) signature besides v2/v3, so keytool can
+          # read the certificate without an SDK tool whose output format moves.
+          want=$(echo "$WANT" | tr -d ':' | tr 'a-z' 'A-Z')
           for apk in app/build/app/outputs/flutter-apk/*.apk; do
-            got=$("$apksigner" verify --print-certs "$apk" |
-              sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr 'a-z' 'A-Z')
-            echo "$(basename "$apk"): $got"
-            if [ -z "$got" ]; then echo "::error::$apk is not signed"; exit 1; fi
-            if [ "$SIGNED" = "true" ] && [ "$got" != "$WANT" ]; then
-              echo "::error::$apk is signed with $got, not the fork key $WANT"; exit 1
+            got=$(keytool -printcert -jarfile "$apk" 2>/dev/null |
+              sed -n 's/^[[:space:]]*SHA256: //p' | head -1 |
+              tr -d ':' | tr 'a-z' 'A-Z')
+            echo "$(basename "$apk"): ${got:-no certificate}"
+            if [ -z "$got" ]; then echo "::error::$apk has no signing certificate"; exit 1; fi
+            if [ "$SIGNED" = "true" ] && [ "$got" != "$want" ]; then
+              echo "::error::$apk is signed with $got, not the fork key $want"; exit 1
             fi
           done
 
