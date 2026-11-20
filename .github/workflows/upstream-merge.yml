@@ -85,6 +85,14 @@ jobs:
                 git add -- "$f"
                 echo "take upstream, version set below: $f"
                 ;;
+              # 上游这处 onError 参数名仍是 `__`，会触发 unnecessary_underscores
+              # 让 dsh_remote 的 dart analyze 失败；取上游改动后就地修掉。
+              packages/dsh_remote/lib/src/dsh_web.dart)
+                git checkout --theirs -- "$f"
+                sed -i -E "s/StackTrace __\)/StackTrace _)/" "$f"
+                git add -- "$f"
+                echo "take upstream, underscore fixed: $f"
+                ;;
               *)
                 echo "$f" >> /tmp/unresolved.txt
                 ;;
