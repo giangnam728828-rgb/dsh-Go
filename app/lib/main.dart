@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app.dart';
+import 'backup/auto_backup.dart';
 import 'dev/frame_probe.dart';
 import 'diagnostics/app_error_log.dart';
 import 'launch/launch_state.dart';
@@ -41,4 +42,7 @@ Future<void> _startApp() async {
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   SystemChrome.setSystemUIOverlayStyle(dshSystemOverlay(PlatformDispatcher.instance.platformBrightness));
   runApp(const ProviderScope(child: DshApp()));
+  // Settings › 备份与恢复 › 自动备份: once per launch, only while the engine is idle,
+  // so a scheduled copy never cuts a conversation short.
+  unawaited(const AutoBackup().runIfDue());
 }
