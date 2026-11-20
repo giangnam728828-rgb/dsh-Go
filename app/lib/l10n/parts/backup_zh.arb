@@ -85,16 +85,16 @@
     }
   },
   "backupNoSecrets": "备份已保存，但系统密钥库读取失败，API key 没有写进这个 ZIP；换一台设备恢复会缺模型密钥",
-  "backupFailed": "备份失败：{error}",
-  "@backupFailed": {
+  "backupAppFailed": "备份失败：{error}",
+  "@backupAppFailed": {
     "placeholders": {
       "error": {
         "type": "String"
       }
     }
   },
-  "backupRestored": "已恢复 {files} 个文件，请关闭并重新打开 App 让设置生效",
-  "@backupRestored": {
+  "backupAppRestored": "已恢复 {files} 个文件，请关闭并重新打开 App 让设置生效",
+  "@backupAppRestored": {
     "placeholders": {
       "files": {
         "type": "int"
