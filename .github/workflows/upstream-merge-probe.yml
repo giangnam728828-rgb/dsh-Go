@@ -1,0 +1,38 @@
+# 一次性探针：在 runner 上试合并上游 main，只输出冲突清单，不改任何分支。
+name: Upstream merge probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge upstream and list conflicts
+        run: |
+          set +e
+          git config user.name "merge-probe"
+          git config user.email "merge-probe@users.noreply.github.com"
+          git remote add upstream https://github.com/ccch1mneyyy/dsh-Go.git
+          git fetch --no-tags upstream main
+          echo "upstream tip: $(git rev-parse --short upstream/main)"
+          echo "base tip:     $(git rev-parse --short HEAD)"
+          echo "merge-base:   $(git merge-base HEAD upstream/main | cut -c1-8)"
+          git merge --no-commit --no-ff upstream/main
+          echo "merge exit: $?"
+          echo "===== CONFLICTED FILES ====="
+          git diff --name-only --diff-filter=U | tee /tmp/conflicts.txt
+          echo "conflict count: $(wc -l < /tmp/conflicts.txt)"
+          echo "===== AUTO-MERGED (changed but no conflict), first 60 ====="
+          git diff --cached --name-only | head -60
+          echo "===== SHORT STATUS, first 60 ====="
+          git status --short | head -60
+          exit 0
