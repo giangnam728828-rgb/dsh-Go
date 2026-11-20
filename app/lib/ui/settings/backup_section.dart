@@ -7,8 +7,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../backup/app_backup.dart';
+import '../../backup/auto_backup.dart';
 import '../../l10n/l10n.dart';
 import '../../runtime/runtime_bridge.dart';
 import '../../runtime/runtime_state.dart';
@@ -96,6 +98,71 @@ enum _BackupWork { backup, restore }
 
 class _BackupSettingsSectionState extends ConsumerState<BackupSettingsSection> {
   _BackupWork? _work;
+
+  /// Null until the preferences are read, so the row never shows a made-up
+  /// period; tests without a preference store simply do not see it.
+  AutoBackupPeriod? _autoPeriod;
+  DateTime? _autoLast;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadAutoBackup());
+  }
+
+  Future<void> _loadAutoBackup() async {
+    try {
+      final settings = AutoBackupSettings.read(await SharedPreferences.getInstance());
+      if (!mounted) return;
+      setState(() {
+        _autoPeriod = settings.period;
+        _autoLast = settings.lastRun;
+      });
+    } catch (_) {
+      // No preferences on this platform: the row stays hidden.
+    }
+  }
+
+  String _periodLabel(L10n l10n, AutoBackupPeriod period) => switch (period) {
+    AutoBackupPeriod.off => l10n.autoBackupOff,
+    AutoBackupPeriod.daily => l10n.autoBackupDaily,
+    AutoBackupPeriod.weekly => l10n.autoBackupWeekly,
+  };
+
+  Future<void> _pickAutoBackup() async {
+    final l10n = context.l10n;
+    final picked = await showDialog<AutoBackupPeriod>(
+      context: context,
+      builder: (dialog) => SimpleDialog(
+        title: Text(l10n.autoBackupTitle),
+        children: [
+          for (final period in AutoBackupPeriod.values)
+            RadioListTile<AutoBackupPeriod>(
+              value: period,
+              groupValue: _autoPeriod ?? AutoBackupPeriod.off,
+              title: Text(_periodLabel(l10n, period)),
+              onChanged: (value) => Navigator.of(dialog).pop(value),
+            ),
+        ],
+      ),
+    );
+    if (picked == null || !mounted) return;
+    try {
+      final preferences = await SharedPreferences.getInstance();
+      await AutoBackupSettings.writePeriod(preferences, picked);
+      if (!mounted) return;
+      setState(() => _autoPeriod = picked);
+    } catch (_) {
+      // Nothing stored, nothing shown as chosen.
+    }
+  }
+
+  /// `2026-11-20 15:40`, in the phone's own zone.
+  static String _formatWhen(DateTime at) {
+    String two(int value) => value.toString().padLeft(2, '0');
+    final local = at.toLocal();
+    return '${local.year}-${two(local.month)}-${two(local.day)} ${two(local.hour)}:${two(local.minute)}';
+  }
 
   /// Stops the local engine so no chat is written while files are read or
   /// replaced. Returns whether it was running and should start again after.
@@ -316,6 +383,16 @@ class _BackupSettingsSectionState extends ConsumerState<BackupSettingsSection> {
           trailing: progress(_BackupWork.restore),
           onTap: busy ? null : () => unawaited(_restore()),
         ),
+        if (_autoPeriod != null)
+          SettingsTile(
+            key: const ValueKey('settings-auto-backup'),
+            icon: AppIcons.scheduled,
+            tint: SettingsHues.general,
+            title: l10n.autoBackupTitle,
+            subtitle: _autoLast == null ? l10n.autoBackupSubtitle : l10n.autoBackupLast(_formatWhen(_autoLast!)),
+            value: Text(_periodLabel(l10n, _autoPeriod!)),
+            onTap: () => unawaited(_pickAutoBackup()),
+          ),
       ],
     );
   }
