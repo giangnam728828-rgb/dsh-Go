@@ -1,5 +1,9 @@
 # 在 runner 上把上游 main 合并进本仓库，冲突只允许出现在 l10n 生成物上，
 # 这些文件交给 app/tool/l10n_merge.py 从 parts 重建。结果推到独立分支，不动现有分支。
+#
+# 手动：Actions › Merge upstream › Run workflow
+# 定时：每天 04:00 (UTC+8) 自动试合并到 merge/upstream-auto，只为看起来得及，
+#       不会自己出包；出包仍是 Build APK 那一步。
 name: Merge upstream
 
 on:
@@ -13,6 +17,8 @@ on:
         description: '合并结果推送到的分支'
         required: true
         default: 'merge/upstream'
+  schedule:
+    - cron: '0 20 * * *'
 
 permissions:
   contents: write
@@ -20,6 +26,9 @@ permissions:
 env:
   FLUTTER_VERSION: 3.47.7
   TZ: Asia/Shanghai
+  # schedule 触发时 inputs 为空，这里给出与手动默认值一致的兜底。
+  UPSTREAM_REF: ${{ inputs.upstream_ref || 'main' }}
+  TARGET_BRANCH: ${{ inputs.target_branch || 'merge/upstream-auto' }}
 
 concurrency:
   group: merge-upstream-${{ github.ref }}
@@ -40,8 +49,8 @@ jobs:
       - name: Fetch upstream
         run: |
           git remote add upstream https://github.com/ccch1mneyyy/dsh-Go.git
-          git fetch --no-tags upstream ${{ inputs.upstream_ref }}
-          echo "upstream tip: $(git rev-parse --short upstream/${{ inputs.upstream_ref }})"
+          git fetch --no-tags upstream "$UPSTREAM_REF"
+          echo "upstream tip: $(git rev-parse --short "upstream/$UPSTREAM_REF")"
           echo "base tip:     $(git rev-parse --short HEAD)"
 
       - name: Merge upstream
@@ -49,7 +58,7 @@ jobs:
           set +e
           git config user.name "dsh-merge-bot"
           git config user.email "merge-bot@users.noreply.github.com"
-          git merge --no-ff --no-commit upstream/${{ inputs.upstream_ref }}
+          git merge --no-ff --no-commit "upstream/$UPSTREAM_REF"
           echo "merge exit: $?"
 
           git diff --name-only --diff-filter=U > /tmp/conflicts.txt
@@ -101,13 +110,10 @@ jobs:
       - name: Commit merge
         run: |
           git add -A
-          if git diff --cached --quiet && git rev-parse -q --verify MERGE_HEAD > /dev/null; then
-            echo "没有暂存变更，但仍需提交 merge"
-          fi
-          git commit --no-verify -m "merge: 同步上游 ${{ inputs.upstream_ref }} ($(git rev-parse --short upstream/${{ inputs.upstream_ref }}))，l10n 由 parts 重建" || echo "nothing to commit"
+          git commit --no-verify -m "merge: 同步上游 $UPSTREAM_REF ($(git rev-parse --short "upstream/$UPSTREAM_REF"))，l10n 由 parts 重建" || echo "nothing to commit"
           git log --oneline -1
 
       - name: Push result branch
         run: |
-          git push origin HEAD:refs/heads/${{ inputs.target_branch }} --force
-          echo "pushed to ${{ inputs.target_branch }}"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH" --force
+          echo "pushed to $TARGET_BRANCH"
