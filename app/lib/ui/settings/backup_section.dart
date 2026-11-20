@@ -143,8 +143,8 @@ class _BackupSettingsSectionState extends ConsumerState<BackupSettingsSection> {
                 children: [
                   Icon(
                     period == (_autoPeriod ?? AutoBackupPeriod.off)
-                        ? Icons.radio_button_checked
-                        : Icons.radio_button_unchecked,
+                        ? AppIcons.radioOn
+                        : AppIcons.radioOff,
                     size: 20,
                   ),
                   const SizedBox(width: 12),
