@@ -121,5 +121,19 @@
     }
   },
   "backupRestartFailed": "本机引擎没能重新启动，请到「本机引擎」里手动启动",
+  "autoBackupTitle": "自动备份",
+  "autoBackupSubtitle": "应用启动后，引擎空闲时自动备份到 Download/DSH-Go；引擎运行中会跳过，不打断对话",
+  "autoBackupOff": "关闭",
+  "autoBackupDaily": "每天",
+  "autoBackupWeekly": "每周",
+  "autoBackupNever": "还没有自动备份过",
+  "autoBackupLast": "上次自动备份：{when}",
+  "@autoBackupLast": {
+    "placeholders": {
+      "when": {
+        "type": "String"
+      }
+    }
+  },
   "searchKwBackup": "备份,恢复,还原,导出,导入,存档,打包,范围,选择,勾选,key,apikey,凭据,密钥,backup,restore,export,import,archive"
 }
