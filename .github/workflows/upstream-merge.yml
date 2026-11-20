@@ -1,0 +1,111 @@
+# 在 runner 上把上游 main 合并进本仓库，冲突只允许出现在 l10n 生成物上，
+# 这些文件交给 app/tool/l10n_merge.py 从 parts 重建。结果推到独立分支，不动现有分支。
+name: Merge upstream
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: '上游分支'
+        required: true
+        default: 'main'
+      target_branch:
+        description: '合并结果推送到的分支'
+        required: true
+        default: 'merge/upstream'
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_VERSION: 3.47.7
+  TZ: Asia/Shanghai
+
+concurrency:
+  group: merge-upstream-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/ccch1mneyyy/dsh-Go.git
+          git fetch --no-tags upstream ${{ inputs.upstream_ref }}
+          echo "upstream tip: $(git rev-parse --short upstream/${{ inputs.upstream_ref }})"
+          echo "base tip:     $(git rev-parse --short HEAD)"
+
+      - name: Merge upstream
+        run: |
+          set +e
+          git config user.name "dsh-merge-bot"
+          git config user.email "merge-bot@users.noreply.github.com"
+          git merge --no-ff --no-commit upstream/${{ inputs.upstream_ref }}
+          echo "merge exit: $?"
+
+          git diff --name-only --diff-filter=U > /tmp/conflicts.txt
+          echo "===== CONFLICTED ====="
+          cat /tmp/conflicts.txt
+
+          rm -f /tmp/unresolved.txt
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              app/lib/l10n/app_*.arb|app/lib/l10n/gen/*)
+                git checkout --theirs -- "$f"
+                git add -- "$f"
+                echo "regenerate later: $f"
+                ;;
+              *)
+                echo "$f" >> /tmp/unresolved.txt
+                ;;
+            esac
+          done < /tmp/conflicts.txt
+
+          if [ -s /tmp/unresolved.txt ]; then
+            echo "::error::存在无法自动解决的冲突，需要人工合并："
+            cat /tmp/unresolved.txt
+            exit 1
+          fi
+          echo "所有冲突都是 l10n 生成物，将由 l10n_merge.py 重建。"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Rebuild l10n from parts
+        working-directory: app
+        run: |
+          flutter pub get
+          python3 tool/l10n_merge.py
+          echo "===== l10n diff stat ====="
+          git -C .. diff --stat -- lib/l10n | tail -20
+
+      - name: Analyze
+        working-directory: app
+        continue-on-error: true
+        run: |
+          flutter analyze --no-pub 2>&1 | tail -60
+
+      - name: Commit merge
+        run: |
+          git add -A
+          if git diff --cached --quiet && git rev-parse -q --verify MERGE_HEAD > /dev/null; then
+            echo "没有暂存变更，但仍需提交 merge"
+          fi
+          git commit --no-verify -m "merge: 同步上游 ${{ inputs.upstream_ref }} ($(git rev-parse --short upstream/${{ inputs.upstream_ref }}))，l10n 由 parts 重建" || echo "nothing to commit"
+          git log --oneline -1
+
+      - name: Push result branch
+        run: |
+          git push origin HEAD:refs/heads/${{ inputs.target_branch }} --force
+          echo "pushed to ${{ inputs.target_branch }}"
