@@ -1,0 +1,102 @@
+# 设置页多了「备份与恢复 / 自动备份」两行后，相机基准图（goldens）过期。
+# 这个工作流只重渲染指定测试的基准图并提交回去，不改任何产品代码。
+name: Refresh goldens
+
+on:
+  workflow_dispatch:
+    inputs:
+      paths:
+        description: '测试文件（空格分隔）'
+        required: true
+        default: 'test/shell/shell_golden_test.dart'
+      branches:
+        description: '提交回去的分支（空格分隔）'
+        required: true
+        default: 'merge/upstream-final'
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_VERSION: 3.47.7
+  TZ: Asia/Shanghai
+
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      DSH_TEST_FONT_DIR: /usr/share/fonts/opentype/noto
+      NOTO_CJK_VERSION: 1:20230817+repack1-3
+      NOTO_EMOJI_VERSION: v2.051
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          token: ${{ secrets.PUSH_TOKEN }}
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Restore golden fonts
+        id: fonts
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/test-fonts
+          key: test-fonts-${{ env.NOTO_CJK_VERSION }}-${{ env.NOTO_EMOJI_VERSION }}
+
+      - name: Download golden fonts
+        if: steps.fonts.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}
+        run: |
+          sudo apt-get update -q
+          apt-get download fonts-noto-cjk="$NOTO_CJK_VERSION" fonts-noto-cjk-extra="$NOTO_CJK_VERSION"
+          for deb in fonts-noto-cjk*.deb; do dpkg-deb -x "$deb" unpacked; done
+          mkdir -p ~/test-fonts
+          cp unpacked/usr/share/fonts/opentype/noto/NotoSansCJK-{Regular,Bold,Light}.ttc ~/test-fonts/
+          curl -fsSL --retry 3 -o ~/test-fonts/NotoColorEmoji.ttf "https://raw.githubusercontent.com/googlefonts/noto-emoji/$NOTO_EMOJI_VERSION/fonts/NotoColorEmoji.ttf"
+
+      - name: Save golden fonts
+        if: steps.fonts.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/test-fonts
+          key: ${{ steps.fonts.outputs.cache-primary-key }}
+
+      - name: Install golden fonts
+        run: |
+          sudo install -Dm644 -t "$DSH_TEST_FONT_DIR" ~/test-fonts/NotoSansCJK-*.ttc
+          sudo install -Dm644 ~/test-fonts/NotoColorEmoji.ttf /usr/share/fonts/noto/NotoColorEmoji.ttf
+
+      - run: flutter pub get
+
+      - name: Re-render goldens
+        env:
+          PATHS: ${{ inputs.paths }}
+        run: |
+          flutter test --no-pub --update-goldens --concurrency=2 --reporter github $PATHS
+
+      - name: Commit and push
+        working-directory: .
+        env:
+          BRANCHES: ${{ inputs.branches }}
+        run: |
+          git config user.name "dsh-golden-bot"
+          git config user.email "golden-bot@users.noreply.github.com"
+          git add -A app/test
+          if git diff --cached --quiet; then
+            echo "基准图没有变化"
+            exit 0
+          fi
+          git commit -m "test(goldens): 设置页新增备份行后重渲染基准图"
+          for branch in $BRANCHES; do
+            git push origin "HEAD:refs/heads/$branch"
+            echo "pushed to $branch"
+          done
