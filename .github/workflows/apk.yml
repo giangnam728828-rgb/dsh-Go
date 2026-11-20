@@ -152,7 +152,9 @@ jobs:
         run: |
           name=()
           [ -z "$BUILD_NAME" ] || name=(--build-name "$BUILD_NAME")
-          bash tooling/build-apk.sh -f '${{ inputs.flavor || 'arm64' }}' "${name[@]}" --keep-daemon
+          # 伙伴素材包（Live2D）是授权资源，不在仓库里，公开 runner 拿不到；
+          # --no-companion 与其他部分的构建结果和旧版一致。
+          bash tooling/build-apk.sh -f '${{ inputs.flavor || 'arm64' }}' "${name[@]}" --keep-daemon --no-companion
 
       # A build signed with a different key cannot be installed over the last
       # one, and Android gives no useful message for it. The expected value is
@@ -191,9 +193,13 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
+          BUILD_NAME: ${{ inputs.build_name }}
         run: |
           mkdir -p out
           ver=$(sed -n 's/^version: *\([0-9][^+ ]*\).*/\1/p' app/pubspec.yaml | head -1)
+          # 源码版本名跟上游保持一致（测试数据依赖它），构建时用 --build-name 覆盖；
+          # 文件名跟这个覆盖后的版本走，免得新版顶着旧号发出去。
+          if [ -n "$BUILD_NAME" ]; then ver="$BUILD_NAME"; fi
           for apk in app/build/app/outputs/flutter-apk/*.apk; do
             flavor=$(basename "$apk" | sed -E 's/^app-(.*)-release\.apk$/\1/')
             cp "$apk" "out/dsh-go-${ver}-${flavor}.apk"
