@@ -193,9 +193,13 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
+          BUILD_NAME: ${{ inputs.build_name }}
         run: |
           mkdir -p out
           ver=$(sed -n 's/^version: *\([0-9][^+ ]*\).*/\1/p' app/pubspec.yaml | head -1)
+          # 源码版本名跟上游保持一致（测试数据依赖它），构建时用 --build-name 覆盖；
+          # 文件名跟这个覆盖后的版本走，免得新版顶着旧号发出去。
+          if [ -n "$BUILD_NAME" ]; then ver="$BUILD_NAME"; fi
           for apk in app/build/app/outputs/flutter-apk/*.apk; do
             flavor=$(basename "$apk" | sed -E 's/^app-(.*)-release\.apk$/\1/')
             cp "$apk" "out/dsh-go-${ver}-${flavor}.apk"
