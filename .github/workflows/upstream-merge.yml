@@ -102,7 +102,13 @@ jobs:
         if: env.VERSION != ''
         run: |
           sed -i -E "s/^version: .*/version: ${VERSION}+1/" app/pubspec.yaml
+          # 指南文档第 3 行的版本横幅跟着走，否则 "Generated files" 检查会失败。
+          for f in docs/guide/README.md docs/guide/harmony/README.md; do
+            [ -f "$f" ] || continue
+            sed -i -E "s/^> dsh-go .*/> dsh-go ${VERSION}/" "$f"
+          done
           grep -n '^version:' app/pubspec.yaml
+          grep -rn '^> dsh-go ' docs/guide --include=README.md | head -5
 
       - uses: subosito/flutter-action@v2
         with:
