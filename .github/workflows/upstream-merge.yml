@@ -110,6 +110,14 @@ jobs:
           grep -n '^version:' app/pubspec.yaml
           grep -rn '^> dsh-go ' docs/guide --include=README.md | head -5
 
+      - name: Resync guide skill assets
+        if: env.VERSION != ''
+        run: |
+          # 随包分发的 dsh-go-guide 素材是 docs/guide 的副本，版本横幅变了必须重写，
+          # 否则 "Generated files" 与 guide_skill_test 都会红。
+          python3 app/tool/guide_sync.py
+          git status --short -- app/assets/skills/dsh-go-guide | head -20
+
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
