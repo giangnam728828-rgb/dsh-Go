@@ -152,7 +152,9 @@ jobs:
         run: |
           name=()
           [ -z "$BUILD_NAME" ] || name=(--build-name "$BUILD_NAME")
-          bash tooling/build-apk.sh -f '${{ inputs.flavor || 'arm64' }}' "${name[@]}" --keep-daemon
+          # 伙伴素材包（Live2D）是授权资源，不在仓库里，公开 runner 拿不到；
+          # --no-companion 与其他部分的构建结果和旧版一致。
+          bash tooling/build-apk.sh -f '${{ inputs.flavor || 'arm64' }}' "${name[@]}" --keep-daemon --no-companion
 
       # A build signed with a different key cannot be installed over the last
       # one, and Android gives no useful message for it. The expected value is
