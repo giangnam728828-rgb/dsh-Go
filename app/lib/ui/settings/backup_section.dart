@@ -233,7 +233,7 @@ class _BackupSettingsSectionState extends ConsumerState<BackupSettingsSection> {
       // Nothing saved, nothing wrong: the person closed the save window.
       discard = true;
     } catch (error) {
-      messenger?.showBriefNotice(l10n.backupFailed('$error'));
+      messenger?.showBriefNotice(l10n.backupAppFailed('$error'));
     } finally {
       if (restart) await _restartRuntime();
       // The ZIP is a copy: the phone or the share sheet has taken it by now.
@@ -277,7 +277,7 @@ class _BackupSettingsSectionState extends ConsumerState<BackupSettingsSection> {
       messenger?.showBriefNotice(
         info.secretCount > 0
             ? l10n.backupRestoredSecrets(info.fileCount, info.secretCount)
-            : l10n.backupRestored(info.fileCount),
+            : l10n.backupAppRestored(info.fileCount),
       );
     } catch (error) {
       messenger?.showBriefNotice(l10n.backupRestoreFailed('$error'));
