@@ -38,5 +38,12 @@
   "backupRestoredSecrets": "Restored {files} files, including {secrets} credentials such as API keys. Close and reopen the app",
   "backupRestoreFailed": "Restore failed and the current data was left as it was: {error}",
   "backupRestartFailed": "The local engine did not start again. Start it from the local engine page",
+  "autoBackupTitle": "Automatic backup",
+  "autoBackupSubtitle": "After the app starts, back up to Download/DSH-Go while the engine is idle; a running engine skips the turn instead of interrupting a chat",
+  "autoBackupOff": "Off",
+  "autoBackupDaily": "Daily",
+  "autoBackupWeekly": "Weekly",
+  "autoBackupNever": "No automatic backup yet",
+  "autoBackupLast": "Last automatic backup: {when}",
   "searchKwBackup": "backup,restore,export,import,archive,snapshot,scope,choose,save,key,apikey,credential,token"
 }
