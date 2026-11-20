@@ -17,6 +17,10 @@ on:
         description: '合并结果推送到的分支'
         required: true
         default: 'merge/upstream'
+      version:
+        description: '版本名（空则保留上游的）；build number 始终由构建脚本按分钟给出'
+        required: false
+        default: ''
   schedule:
     - cron: '0 20 * * *'
 
@@ -29,6 +33,7 @@ env:
   # schedule 触发时 inputs 为空，这里给出与手动默认值一致的兜底。
   UPSTREAM_REF: ${{ inputs.upstream_ref || 'main' }}
   TARGET_BRANCH: ${{ inputs.target_branch || 'merge/upstream-auto' }}
+  VERSION: ${{ inputs.version || '' }}
 
 concurrency:
   group: merge-upstream-${{ github.ref }}
@@ -74,6 +79,12 @@ jobs:
                 git add -- "$f"
                 echo "regenerate later: $f"
                 ;;
+              # 上游也会动 pubspec.yaml；取上游为准，版本号在下一步统一设置。
+              app/pubspec.yaml)
+                git checkout --theirs -- "$f"
+                git add -- "$f"
+                echo "take upstream, version set below: $f"
+                ;;
               *)
                 echo "$f" >> /tmp/unresolved.txt
                 ;;
@@ -85,7 +96,13 @@ jobs:
             cat /tmp/unresolved.txt
             exit 1
           fi
-          echo "所有冲突都是 l10n 生成物，将由 l10n_merge.py 重建。"
+          echo "所有冲突都是可重建的生成物或 pubspec，将由后续步骤处理。"
+
+      - name: Set version
+        if: env.VERSION != ''
+        run: |
+          sed -i -E "s/^version: .*/version: ${VERSION}+1/" app/pubspec.yaml
+          grep -n '^version:' app/pubspec.yaml
 
       - uses: subosito/flutter-action@v2
         with:
