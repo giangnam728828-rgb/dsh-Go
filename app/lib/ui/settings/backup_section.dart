@@ -137,11 +137,20 @@ class _BackupSettingsSectionState extends ConsumerState<BackupSettingsSection> {
         title: Text(l10n.autoBackupTitle),
         children: [
           for (final period in AutoBackupPeriod.values)
-            RadioListTile<AutoBackupPeriod>(
-              value: period,
-              groupValue: _autoPeriod ?? AutoBackupPeriod.off,
-              title: Text(_periodLabel(l10n, period)),
-              onChanged: (value) => Navigator.of(dialog).pop(value),
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(dialog).pop(period),
+              child: Row(
+                children: [
+                  Icon(
+                    period == (_autoPeriod ?? AutoBackupPeriod.off)
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 12),
+                  Text(_periodLabel(l10n, period)),
+                ],
+              ),
             ),
         ],
       ),
