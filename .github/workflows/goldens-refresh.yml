@@ -9,6 +9,10 @@ on:
         description: '测试文件（空格分隔）'
         required: true
         default: 'test/shell/shell_golden_test.dart'
+      source_branch:
+        description: '要更新基准图的分支（代码从这个分支取）'
+        required: true
+        default: 'merge/upstream-final'
       branches:
         description: '提交回去的分支（空格分隔）'
         required: true
@@ -35,7 +39,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ inputs.source_branch }}
           fetch-depth: 0
           token: ${{ secrets.PUSH_TOKEN }}
 
