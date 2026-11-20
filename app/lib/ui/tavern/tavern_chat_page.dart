@@ -9,6 +9,7 @@ import 'dart:async';
 import 'package:dsh_tavern/dsh_tavern.dart';
 import 'package:flutter/foundation.dart' show ValueListenable, listEquals;
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart' show SchedulerBinding;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -32,6 +33,7 @@ import '../../tavern/tavern_islands.dart';
 import '../../tavern/tavern_canvas.dart';
 import '../../tavern/tavern_canvas_calls.dart';
 import '../../tavern/tavern_card_scripts.dart';
+import '../../tavern/tavern_script_wire.dart' show tavernScriptKey;
 import '../../tavern/tavern_components.dart' show tavernComponentTagsOut;
 import '../../tavern/tavern_jump.dart';
 import '../../tavern/tavern_markers.dart';
@@ -100,6 +102,9 @@ class _TavernChatPageState extends ConsumerState<TavernChatPage> {
   final _input = TextEditingController();
   final _focus = FocusNode();
   final _scrolled = ValueNotifier(0.0);
+
+  /// The HTML page scrolls inside itself: the header is always over the story.
+  final _shaded = ValueNotifier(1.0);
 
   /// Scrolled back into the story, away from the newest lines: the chips over
   /// the box fold away for the reading (back when typing).
@@ -185,6 +190,39 @@ class _TavernChatPageState extends ConsumerState<TavernChatPage> {
   final _canvasStream = ValueNotifier<(String, String)?>(null);
   bool _canvasOn = false;
 
+  /// Each message's HTML on the canvas, by node, with the text it was made
+  /// from.
+  var _canvasHtml = <String, (String, String)>{};
+
+  /// [m] as the pages and the canvas show it. A page of display passes comes
+  /// in one a frame; each building the whole page (and the canvas's every
+  /// message) again would be a page build a frame, so they are taken in
+  /// together ([_takeShown]).
+  String _shownOf(TavernMessage m) {
+    final shown = tavernShownTextProvider((widget.chatId, m.nodeId, m.text));
+    ref.listen(shown, (_, _) => unawaited(_takeShown()));
+    return ref.read(shown).value ?? m.text;
+  }
+
+  bool _takingShown = false;
+
+  /// Builds the page again for the display passes that came in: once all
+  /// those asked for are done, or [_shownBeat] after the first of them,
+  /// whichever is sooner.
+  Future<void> _takeShown() async {
+    if (_takingShown) return;
+    _takingShown = true;
+    final queue = ref.read(_displayQueueProvider);
+    final since = Stopwatch()..start();
+    while (!queue.idle && since.elapsed < _shownBeat) {
+      await SchedulerBinding.instance.endOfFrame;
+    }
+    _takingShown = false;
+    if (mounted) setState(() {});
+  }
+
+  static const _shownBeat = Duration(milliseconds: 200);
+
   /// A card's script on the canvas asking the engine (dsh.call): in this
   /// chat's own script context, opened on its first call.
   TavernCanvasCalls? _calls;
@@ -265,6 +303,28 @@ class _TavernChatPageState extends ConsumerState<TavernChatPage> {
         : null;
   }
 
+  /// The reply as it grows, fed to the canvas at most once every
+  /// [_EveryBeat.beat] (the last piece always): it is made into HTML whole
+  /// each time, not for every piece that arrives.
+  Timer? _canvasBeat;
+  bool _canvasMissed = false;
+
+  void _feedCanvasOnBeat() {
+    if (!_canvasOn) return;
+    if (_canvasBeat != null) {
+      _canvasMissed = true;
+      return;
+    }
+    _feedCanvas();
+    _canvasBeat = Timer(_EveryBeat.beat, () {
+      _canvasBeat = null;
+      if (_canvasMissed && mounted) {
+        _canvasMissed = false;
+        _feedCanvasOnBeat();
+      }
+    });
+  }
+
   String? _error;
 
   /// [_error] is how a reply ended, not a failure: said without alarm.
@@ -331,7 +391,7 @@ class _TavernChatPageState extends ConsumerState<TavernChatPage> {
     );
     _voiceFlag = ref.read(voiceInputActiveProvider.notifier);
     _voice.addListener(_reportVoice);
-    _live.addListener(_feedCanvas);
+    _live.addListener(_feedCanvasOnBeat);
   }
 
   @override
@@ -347,7 +407,8 @@ class _TavernChatPageState extends ConsumerState<TavernChatPage> {
     scheduleMicrotask(() => readAloud.stopWhere((id) => id.startsWith('tavern:')));
     unawaited(_turn?.cancel());
     _stream.dispose();
-    _live.removeListener(_feedCanvas);
+    _live.removeListener(_feedCanvasOnBeat);
+    _canvasBeat?.cancel();
     _live.dispose();
     _canvasStream.dispose();
     unawaited(_calls?.close());
@@ -361,6 +422,7 @@ class _TavernChatPageState extends ConsumerState<TavernChatPage> {
     _input.dispose();
     _focus.dispose();
     _scrolled.dispose();
+    _shaded.dispose();
     _readingBack.dispose();
     _transcript.dispose();
     _immersive.dispose();
@@ -378,15 +440,49 @@ class _TavernChatPageState extends ConsumerState<TavernChatPage> {
   bool _hasOlder = false;
   bool _loadingOlder = false;
 
-  Future<void> _reload() async {
+  /// [whole]: read the whole window even while a reply is written (an edit
+  /// further back than the newest page).
+  Future<void> _reload({bool whole = false}) async {
     final window = _window;
+    // While a reply is written (kept every half second), the newest page
+    // tells whether anything besides it changed: the whole window, hundreds
+    // of messages once scrolled back, is not read again twice a second. What
+    // changed further back is read when the reply is done.
+    final loaded = _messages;
+    if (!whole && _running && loaded != null && loaded.length > _page && (loaded.length >= window || !_hasOlder)) {
+      final newest = await _tavern.path(widget.chatId, limit: _page);
+      if (!mounted) return;
+      if (_sameBesides(loaded.sublist(loaded.length - _page), newest, _streamNode)) return;
+    }
     final messages = await _tavern.path(widget.chatId, limit: window);
     if (!mounted) return;
+    // The engine keeps the reply being written every half second; that one
+    // is drawn from the stream, so the rest staying as they were is nothing
+    // to draw again.
+    final hasOlder = messages.length >= window;
+    if (_running && _sameBesides(_messages, messages, _streamNode) && hasOlder == _hasOlder) return;
     setState(() {
       _messages = messages;
-      _hasOlder = messages.length >= window;
+      _hasOlder = hasOlder;
     });
     unawaited(_readPinned());
+  }
+
+  static bool _sameBesides(List<TavernMessage>? old, List<TavernMessage> next, String? streaming) {
+    if (old == null || old.length != next.length) return false;
+    for (var i = 0; i < old.length; i++) {
+      final (a, b) = (old[i], next[i]);
+      if (a.nodeId != b.nodeId) return false;
+      if (a.nodeId == streaming) continue;
+      if (a.text != b.text ||
+          a.reasoning != b.reasoning ||
+          a.hidden != b.hidden ||
+          a.siblingIndex != b.siblingIndex ||
+          a.siblingCount != b.siblingCount) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /// The state the card pins, for the header's line (engine T17); none when
@@ -507,6 +603,9 @@ class _TavernChatPageState extends ConsumerState<TavernChatPage> {
             _refreshTools();
           case TavernTurnStarted(:final message):
             setState(() => _streamNode = message.nodeId);
+            // Continuing a reply: it starts from what the reply already says.
+            _stream.value = (text: message.text, reasoning: message.reasoning ?? '');
+            _live.text = message.text;
             unawaited(_reload());
           case TavernTextDelta(:final nodeId, :final text):
             _adopt(nodeId);
@@ -1048,10 +1147,10 @@ class _TavernChatPageState extends ConsumerState<TavernChatPage> {
   /// A quick reply sends as it is; on failure it waits in the box.
   /// A card script's button: pressed in the page, where the script listens
   /// for it (eventOn(getButtonEvent(name))).
-  void _pressScriptButton(String scriptId, String name) {
+  void _pressScriptButton(String key, String name) {
     unawaited(HapticFeedback.selectionClick());
     final deliver = _canvasCalls.deliver;
-    if (deliver != null) unawaited(deliver({'kind': 'button', 'scriptId': scriptId, 'name': name}));
+    if (deliver != null) unawaited(deliver({'kind': 'button', 'key': key, 'name': name}));
   }
 
   void _sendQuick(String text) {
@@ -1419,7 +1518,10 @@ class _TavernChatPageState extends ConsumerState<TavernChatPage> {
   Future<void> _edit(TavernMessage message) async {
     final speaker = message.role == TavernRole.user ? context.l10n.tavernYou : message.speaker;
     final text = await Navigator.of(context).push(TavernMessageEditPage.route(speaker: speaker, text: message.text));
-    if (text != null && text != message.text && mounted) await _tavern.edit(widget.chatId, message.nodeId, text);
+    if (text == null || text == message.text || !mounted) return;
+    await _tavern.edit(widget.chatId, message.nodeId, text);
+    // While a reply is written the newest page alone is read back; this one may be older.
+    if (mounted && _running) await _reload(whole: true);
   }
 
   @override
@@ -1462,7 +1564,13 @@ class _TavernChatPageState extends ConsumerState<TavernChatPage> {
     final showUsage = ref.watch(tavernSettingsProvider.select((s) => s.showUsage));
     // What each reply's turn did with tools, by reply (the engine's record).
     final toolTurns = ref.watch(tavernChatToolTurnsProvider(widget.chatId)).value ?? const {};
-    final messages = _messages;
+    // The story waits for the card's look: drawn before it, it would all be
+    // drawn again (its islands loaded twice) when the accent came.
+    final themePending =
+        characterId != null &&
+        ref.watch(tavernSettingsProvider.select((s) => s.cardTheme)) &&
+        !ref.watch(tavernCharacterDetailProvider(characterId).select((d) => d.hasValue || d.hasError));
+    final messages = themePending ? null : _messages;
     final (String status, StatusTone tone) = switch (()) {
       // A group: who speaks now, and who follows.
       _ when _running && _groupProgress?.speakerCharacterId != null => (
@@ -1563,16 +1671,17 @@ class _TavernChatPageState extends ConsumerState<TavernChatPage> {
         if (tavernUsesMvu(card.value)) _mvuOn = _turnOnMvu();
       }
     }
-    // The buttons the card's own scripts show: only where those scripts run
-    // (the canvas, scripts on, one character).
-    final scriptCharacter = _canvasCharacter;
+    // The buttons the chat's scripts (global, preset, card) show, by each
+    // one's key: only where those scripts run (the canvas, scripts on).
     // A script that changed its buttons (replaceScriptButtons…) shows those.
     final live = _calls?.liveButtons.value ?? const <String, List<String>>{};
-    final scriptButtons =
-        canvas && scriptCharacter != null && !ref.watch(tavernSettingsProvider.select((s) => s.islandNoScripts))
+    final scriptButtons = canvas && !ref.watch(tavernSettingsProvider.select((s) => s.islandNoScripts))
         ? [
-            for (final s in ref.watch(tavernCardScriptsProvider(scriptCharacter)).value ?? const <TavernCardScript>[])
-              for (final b in live[s.id] ?? s.buttons) (s.id, b),
+            for (final s
+                in ref.watch(tavernChatScriptsProvider((widget.chatId, _canvasCharacter))).value?.scripts ??
+                    const <TavernRunnableScript>[])
+              if (s.buttonsEnabled)
+                for (final b in live[tavernScriptKey(s.owner)] ?? tavernScriptButtons(s)) (tavernScriptKey(s.owner), b),
           ]
         : const <(String, String)>[];
     // The card's own scripts, where they wait on 整页画布 being on (off, and
@@ -1584,16 +1693,42 @@ class _TavernChatPageState extends ConsumerState<TavernChatPage> {
         hintCharacter != null &&
             !ref.watch(tavernSettingsProvider.select((s) => s.islandNoScripts)) &&
             ref.watch(tavernScriptsHintOffProvider(hintCharacter)).value == false
-        ? (ref.watch(tavernCardScriptsProvider(hintCharacter)).value ?? const <TavernCardScript>[]).length
+        ? [
+            for (final s
+                in ref.watch(tavernChatScriptsProvider((widget.chatId, hintCharacter))).value?.scripts ??
+                    const <TavernRunnableScript>[])
+              if (s.owner.kind == TavernScriptOwnerKind.character) s,
+          ].length
         : 0;
     // The pages and the canvas read each message as shown, through the
-    // display regex; the bubble and novel rows ask for their own.
+    // display regex; the bubble and novel rows ask for their own. Newest
+    // first: the passes run in the order asked, and the newest are what the
+    // page and the canvas show first.
     final shownText = layout == TavernLayout.visualNovel || canvas
-        ? {
-            for (final m in messages ?? const <TavernMessage>[])
-              m.nodeId: ref.watch(tavernShownTextProvider((widget.chatId, m.nodeId, m.text))).value ?? m.text,
-          }
+        ? {for (final m in (messages ?? const <TavernMessage>[]).reversed) m.nodeId: _shownOf(m)}
         : const <String, String>{};
+    // Each message's HTML made again only when its shown text changed.
+    final canvasEntries = <TavernCanvasEntry>[];
+    if (canvas) {
+      final made = <String, (String, String)>{};
+      for (final (i, m) in (messages ?? const <TavernMessage>[]).indexed) {
+        if (_running && m.nodeId == _streamNode) continue;
+        final source = tavernStripMarkers(shownText[m.nodeId] ?? m.text);
+        final kept = _canvasHtml[m.nodeId];
+        final html = made[m.nodeId] = kept != null && kept.$1 == source ? kept : (source, tavernStoryHtml(source));
+        canvasEntries.add(
+          TavernCanvasEntry(
+            mesid: i,
+            nodeId: m.nodeId,
+            name: tavernSpeaker(context, m),
+            isUser: m.role == TavernRole.user,
+            isSystem: m.role == TavernRole.narrator || m.role == TavernRole.system,
+            html: html.$2,
+          ),
+        );
+      }
+      _canvasHtml = made;
+    }
 
     final cardPicture = cardTheme?.background;
     final scene =
@@ -1605,6 +1740,7 @@ class _TavernChatPageState extends ConsumerState<TavernChatPage> {
       turn: messages?.lastOrNull?.nodeId,
       topInset: topInset,
       characterId: characterId,
+      scriptsCharacterId: _canvasCharacter,
       name: name,
       busy: _running,
       onSuggest: _suggest,
@@ -1635,7 +1771,7 @@ class _TavernChatPageState extends ConsumerState<TavernChatPage> {
             title: name,
             status: status,
             tone: tone,
-            scrolledUnder: _scrolled,
+            scrolledUnder: canvas ? _shaded : _scrolled,
             // The title is the character's: its page; a group's, its settings.
             // The chat's own things are in 舞台 › 本局.
             onDetails: () {
@@ -1730,18 +1866,7 @@ class _TavernChatPageState extends ConsumerState<TavernChatPage> {
                   )
                 : canvas
                 ? ref.watch(tavernCanvasBuilderProvider)(
-                    entries: [
-                      for (final (i, m) in (messages ?? const <TavernMessage>[]).indexed)
-                        if (!(_running && m.nodeId == _streamNode))
-                          TavernCanvasEntry(
-                            mesid: i,
-                            nodeId: m.nodeId,
-                            name: tavernSpeaker(context, m),
-                            isUser: m.role == TavernRole.user,
-                            isSystem: m.role == TavernRole.narrator || m.role == TavernRole.system,
-                            html: tavernStoryHtml(tavernStripMarkers(shownText[m.nodeId] ?? m.text)),
-                          ),
-                    ],
+                    entries: canvasEntries,
                     streaming: _canvasStream,
                     onMenu: (node) {
                       final m = messages?.where((m) => m.nodeId == node).firstOrNull;
@@ -1756,11 +1881,15 @@ class _TavernChatPageState extends ConsumerState<TavernChatPage> {
                 : NotificationListener<Notification>(
                     onNotification: (n) {
                       final metrics = switch (n) {
-                        ScrollNotification(:final metrics) || ScrollMetricsNotification(:final metrics) => metrics,
+                        ScrollNotification(:final metrics, depth: 0) ||
+                        ScrollMetricsNotification(:final metrics, depth: 0) => metrics,
                         _ => null,
                       };
                       if (metrics != null && metrics.axis == Axis.vertical) {
-                        _scrolled.value = ((metrics.maxScrollExtent - metrics.pixels) / 24).clamp(0.0, 1.0);
+                        // Shaded whenever the story is longer than the screen, at either
+                        // end too: the oldest message sits close under the header and an
+                        // overscroll pulls the text under it.
+                        _scrolled.value = (metrics.maxScrollExtent / 24).clamp(0.0, 1.0);
                         _readingBack.value = metrics.pixels > 240;
                         if (n is ScrollNotification) {
                           if (novel) _immerse(n);
@@ -2079,10 +2208,12 @@ class _MessageRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final drawn = novel ? _novel(context) : _bubble(context);
     // A reply with alternatives swipes sideways through them, like ‹ ›.
-    final swipes = message.role == TavernRole.character && !busy && (last || message.siblingCount > 1);
-    final body = swipes
+    // Always in it, turned off when it can't: a row that changed shape would
+    // build its islands (web pages) afresh.
+    final body = message.role == TavernRole.character
         ? _SwipeToSwitch(
             key: ValueKey('tavern-swipe-${message.nodeId}'),
+            enabled: !busy && (last || message.siblingCount > 1),
             canPrevious: message.siblingIndex > 0,
             canNext: message.siblingIndex + 1 < message.siblingCount || last,
             onSwitch: onSibling,
@@ -2405,12 +2536,14 @@ class _QuickReplyRow extends StatelessWidget {
 class _SwipeToSwitch extends StatefulWidget {
   const _SwipeToSwitch({
     super.key,
+    required this.enabled,
     required this.canPrevious,
     required this.canNext,
     required this.onSwitch,
     required this.child,
   });
 
+  final bool enabled;
   final bool canPrevious;
   final bool canNext;
   final ValueChanged<int> onSwitch;
@@ -2451,12 +2584,14 @@ class _SwipeToSwitchState extends State<_SwipeToSwitch> {
   @override
   Widget build(BuildContext context) => GestureDetector(
     behavior: HitTestBehavior.translucent,
-    onHorizontalDragUpdate: _update,
-    onHorizontalDragEnd: _end,
-    onHorizontalDragCancel: () => setState(() {
-      _dragging = false;
-      _dx = 0;
-    }),
+    onHorizontalDragUpdate: widget.enabled ? _update : null,
+    onHorizontalDragEnd: widget.enabled ? _end : null,
+    onHorizontalDragCancel: widget.enabled
+        ? () => setState(() {
+            _dragging = false;
+            _dx = 0;
+          })
+        : null,
     child: AnimatedContainer(
       duration: _dragging ? Duration.zero : AppMotion.of(context, AppMotion.standard),
       curve: AppMotion.std,
@@ -2523,9 +2658,46 @@ Widget _beside(Widget? stage, Widget story) => stage == null
 /// never stored. The text as written until that comes, or if it cannot.
 final tavernShownTextProvider = FutureProvider.autoDispose.family<String, (String, String, String)>((ref, key) async {
   final (chatId, nodeId, text) = key;
-  final shown = await ref.watch(tavernProvider).displayText(chatId, nodeId: nodeId, text: text);
-  return shown.superseded ? text : shown.text;
+  final tavern = ref.watch(tavernProvider);
+  // Its row gone before its turn came: nothing to show it in, so no pass and
+  // no frame waited for.
+  return ref.watch(_displayQueueProvider).run(alive: () => ref.mounted, orElse: text, () async {
+    final shown = await tavern.displayText(chatId, nodeId: nodeId, text: text);
+    return shown.superseded ? text : shown.text;
+  });
 });
+
+/// Display passes one at a time, a frame between: a page of messages asking
+/// at once would run theirs back to back on this thread (the engine's), a
+/// freeze of their sum.
+final _displayQueueProvider = Provider<_DisplayQueue>((ref) => _DisplayQueue());
+
+class _DisplayQueue {
+  Future<void> _tail = Future<void>.value();
+  int _queued = 0;
+
+  /// No pass waiting or running.
+  bool get idle => _queued == 0;
+
+  Future<T> run<T>(Future<T> Function() job, {required bool Function() alive, required T orElse}) async {
+    final behind = _queued > 0 ? _tail : null;
+    _queued++;
+    final done = Completer<void>();
+    _tail = done.future;
+    try {
+      if (behind != null) {
+        await behind;
+        if (!alive()) return orElse;
+        await SchedulerBinding.instance.endOfFrame;
+      }
+      if (!alive()) return orElse;
+      return await job();
+    } finally {
+      _queued--;
+      done.complete();
+    }
+  }
+}
 
 /// The message gone to: a soft wash of the accent for a moment.
 class _JumpMark extends StatelessWidget {
@@ -2580,9 +2752,9 @@ class _Shown extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // Expression markers ([表情:x]) pick her picture; they are not words.
-    final shown = tavernStripMarkers(
-      ref.watch(tavernShownTextProvider((chatId, message.nodeId, message.text))).value ?? message.text,
-    );
+    // Only the text: a pass that changed nothing builds nothing again.
+    final display = tavernShownTextProvider((chatId, message.nodeId, message.text));
+    final shown = tavernStripMarkers(ref.watch(display.select((d) => d.value ?? message.text)));
     Widget text(String markdown) =>
         MarkdownBody(text: indent ? tavernIndentParagraphs(markdown) : markdown, selectable: false);
     // HTML in it: those parts in islands of their own (酒馆设置 › 显示);
@@ -2592,6 +2764,9 @@ class _Shown extends ConsumerWidget {
       islands: _IslandsScope.of(context) ?? ref.watch(tavernSettingsProvider.select((s) => s.islands)),
     );
     if (parts case [TavernTextPart()]) return text(shown);
+    // Islands wait for the display pass: one built from the raw text would
+    // be thrown away (a web page loaded twice) when it comes.
+    final settled = ref.watch(display.select((d) => d.hasValue || d.hasError));
     final island = ref.watch(tavernIslandBuilderProvider);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2599,6 +2774,7 @@ class _Shown extends ConsumerWidget {
         for (final part in parts)
           switch (part) {
             TavernTextPart(:final markdown) => text(markdown),
+            TavernIslandPart() when !settled => const SizedBox.shrink(),
             TavernIslandPart(:final html) => Padding(
               padding: const EdgeInsets.symmetric(vertical: 6),
               child: TavernIslandMessage(
@@ -2753,10 +2929,28 @@ class _StreamingReply extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-    listenable: Listenable.merge([stream, live]),
-    builder: (context, _) {
+    listenable: stream,
+    // Its words are laid out again at most every 50 ms, not with each piece
+    // ([live] passes the text on as it comes while the display regex changes
+    // nothing): a long reply is not parsed again a hundred times.
+    child: _EveryBeat(
+      listenable: live,
+      builder: (context) {
+        final shown = live.shown;
+        if (shown.isEmpty) return const SizedBox.shrink();
+        // Component tags turn into cards once the reply is in; while it is
+        // written, only their words.
+        return MarkdownBody(
+          text: indent
+              ? tavernIndentParagraphs(tavernComponentTagsOut(tavernStripMarkers(shown)))
+              : tavernComponentTagsOut(tavernStripMarkers(shown)),
+          streaming: true,
+          selectable: false,
+        );
+      },
+    ),
+    builder: (context, words) {
       final (:text, :reasoning) = stream.value;
-      final shown = live.shown;
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2781,20 +2975,71 @@ class _StreamingReply extends StatelessWidget {
             ),
           if (text.isEmpty && reasoning.isEmpty)
             const Align(alignment: Alignment.centerLeft, child: TypingIndicator())
-          else if (shown.isNotEmpty)
-            // Component tags turn into cards once the reply is in; while it
-            // is written, only their words.
-            MarkdownBody(
-              text: indent
-                  ? tavernIndentParagraphs(tavernComponentTagsOut(tavernStripMarkers(shown)))
-                  : tavernComponentTagsOut(tavernStripMarkers(shown)),
-              streaming: true,
-              selectable: false,
-            ),
+          else
+            words!,
         ],
       );
     },
   );
+}
+
+/// Builds again when [listenable] changes, at most once every [beat]; the
+/// last change always gets its build.
+class _EveryBeat extends StatefulWidget {
+  const _EveryBeat({required this.listenable, required this.builder});
+
+  static const beat = Duration(milliseconds: 50);
+
+  final Listenable listenable;
+  final WidgetBuilder builder;
+
+  @override
+  State<_EveryBeat> createState() => _EveryBeatState();
+}
+
+class _EveryBeatState extends State<_EveryBeat> {
+  Timer? _resting;
+  bool _missed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.listenable.addListener(_changed);
+  }
+
+  @override
+  void didUpdateWidget(_EveryBeat old) {
+    super.didUpdateWidget(old);
+    if (old.listenable != widget.listenable) {
+      old.listenable.removeListener(_changed);
+      widget.listenable.addListener(_changed);
+    }
+  }
+
+  void _changed() {
+    if (_resting != null) {
+      _missed = true;
+      return;
+    }
+    setState(() {});
+    _resting = Timer(_EveryBeat.beat, () {
+      _resting = null;
+      if (_missed && mounted) {
+        _missed = false;
+        _changed();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    widget.listenable.removeListener(_changed);
+    _resting?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.builder(context);
 }
 
 /// How long the model has thought: from the first second, after the label;
